@@ -903,6 +903,7 @@ class SafetyGateTests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions), "teardown order is wrong")
         self.assertIn("params.cheat_list = (uint32_t *)cheats;", boot)
         self.assertIn("params.detect_cic_seed = true;", boot)
+        self.assertIn("params.clear_rdram = false;", boot)
 
     def test_probe_path_has_no_writes_saves_or_boot(self):
         source = ((ROOT / "src/x7_probe.c").read_text(encoding="utf-8")
