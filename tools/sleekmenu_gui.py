@@ -2678,21 +2678,25 @@ def build(smoke: bool = False, card: str = "", metadata: str = "", song: str = "
             # Even a shallow search can stall on an unrelated drive. Keep
             # every discovery probe off Tk's thread, and never touch Tk here.
             found = removable_volumes()
-            chosen = preferred_card(found) if select else None
-            results.put((found, chosen))
+            results.put((found, None, not select))
+            if select:
+                results.put((found, preferred_card(found), True))
 
         def show_cards() -> None:
             if request != state["card_refresh"]:
                 return
             try:
-                found, chosen = results.get_nowait()
+                found, chosen, complete = results.get_nowait()
             except queue.Empty:
                 root.after(100, show_cards)
                 return
-            state["card_probe"] = None
             card_box["values"] = [str(p) for p in found]
-            if not card_var.get() and chosen is not None:
-                card_var.set(str(chosen))
+            if complete:
+                state["card_probe"] = None
+                if not card_var.get() and chosen is not None:
+                    card_var.set(str(chosen))
+            else:
+                root.after(100, show_cards)
 
         threading.Thread(target=probe, name="sleekmenu-cards", daemon=True).start()
         root.after(100, show_cards)
