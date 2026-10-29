@@ -138,7 +138,7 @@ def has_games(card: Path) -> bool | None:
     for directory, subdirs, files in os.walk(card, onerror=scan_errors.append):
         depth = len(Path(directory).relative_to(card).parts)
         subdirs[:] = ([] if depth >= 2 else
-                      [name for name in subdirs if not card_layout.hidden(name)])
+                      [name for name in subdirs if not card_layout.excluded_directory(name)])
         if any(not card_layout.hidden(name) and Path(name).suffix.casefold() in (".z64", ".n64")
                for name in files):
             return True
