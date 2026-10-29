@@ -2135,8 +2135,9 @@ def build(smoke: bool = False, card: str = "", metadata: str = "", song: str = "
     colors = palette(root, tk, ttk)
     edit_menu = EditMenu(root)
 
-    state: dict = {"runner": None, "steps": Steps(), "status": card_status(None), "walk": None}
-    card_var = tk.StringVar()
+    state: dict = {"runner": None, "steps": Steps(), "status": card_status(None), "walk": None,
+                   "card_refresh": 0, "card_probe": None}
+    card_var = tk.StringVar(value=card)
     roms_var = tk.StringVar()               # "" is the whole card
     roms_shown = tk.StringVar(value=shown_folder(""))
     roms_note = tk.StringVar()
@@ -2667,12 +2668,34 @@ def build(smoke: bool = False, card: str = "", metadata: str = "", song: str = "
             stop.pack_forget()
 
     def refresh_cards() -> None:
-        found = removable_volumes()
-        card_box["values"] = [str(p) for p in found]
-        if not card_var.get():
-            chosen = preferred_card(found)
-            if chosen is not None:
+        state["card_refresh"] += 1
+        request = state["card_refresh"]
+        select = not card_var.get()
+        results: queue.Queue = queue.Queue()
+        state["card_probe"] = results
+
+        def probe() -> None:
+            # Even a shallow search can stall on an unrelated drive. Keep
+            # every discovery probe off Tk's thread, and never touch Tk here.
+            found = removable_volumes()
+            chosen = preferred_card(found) if select else None
+            results.put((found, chosen))
+
+        def show_cards() -> None:
+            if request != state["card_refresh"]:
+                return
+            try:
+                found, chosen = results.get_nowait()
+            except queue.Empty:
+                root.after(100, show_cards)
+                return
+            state["card_probe"] = None
+            card_box["values"] = [str(p) for p in found]
+            if not card_var.get() and chosen is not None:
                 card_var.set(str(chosen))
+
+        threading.Thread(target=probe, name="sleekmenu-cards", daemon=True).start()
+        root.after(100, show_cards)
         state["shown_card"] = None          # read the card again, even the same one
         state["walk"] = None
         on_card_change()
@@ -2830,7 +2853,8 @@ def build(smoke: bool = False, card: str = "", metadata: str = "", song: str = "
         result_var.set("Stopping…")
 
     ttk.Button(card_buttons, text="Choose…", command=browse_card).pack(side="left")
-    ttk.Button(card_buttons, text="Refresh", command=refresh_cards).pack(side="left", padx=(6, 0))
+    refresh_button = ttk.Button(card_buttons, text="Refresh", command=refresh_cards)
+    refresh_button.pack(side="left", padx=(6, 0))
     choose_roms.configure(command=browse_roms)
     choose_pack.configure(command=browse_metadata)
     forget_pack.configure(command=lambda: metadata_var.set(""))
@@ -2850,8 +2874,6 @@ def build(smoke: bool = False, card: str = "", metadata: str = "", song: str = "
     on_roms_change()
     read_music()
     refresh_cards()
-    if card:
-        card_var.set(card)
     if metadata:
         metadata_var.set(metadata)
     state["last_code"] = None
@@ -2875,6 +2897,7 @@ def build(smoke: bool = False, card: str = "", metadata: str = "", song: str = "
     state["start"] = start
     state["stop"] = ask_stop
     state["buttons"] = {"action": action, "stop": stop, "coffee": coffee, "boot": boot_check,
+                        "refresh": refresh_button,
                         "cheats": cheats_check, "shots": shots_check, "browser": browser_check,
                         "music": choose_music, "music_remove": remove_music}
     state["notebook"] = notebook

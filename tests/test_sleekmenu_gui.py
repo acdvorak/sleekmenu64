@@ -14,6 +14,7 @@ import io
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import unittest.mock
@@ -708,6 +709,16 @@ class WindowTests(unittest.TestCase):
         # loop". Collect them here, on the thread that made them.
         gc.collect()
 
+    def wait_for(self, root, condition):
+        deadline = time.monotonic() + 3
+        while not condition() and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.005)
+        self.assertTrue(condition(), "the window did not finish updating")
+
+    def wait_for_card_probe(self, root):
+        self.wait_for(root, lambda: root.sleekmenu_state["card_probe"] is None)
+
     def test_the_window_opens_and_closes(self):
         root = sleekmenu_gui.build(smoke=True)
         root.mainloop()
@@ -1011,30 +1022,163 @@ class WindowTests(unittest.TestCase):
             (installed / card_layout.BROWSER_ROM).write_bytes(sleekmenu())
             with mock.patch.object(sleekmenu_gui, "removable_volumes", return_value=[empty, installed]):
                 root = sleekmenu_gui.build()
-                root.update()
+                self.wait_for_card_probe(root)
                 state = root.sleekmenu_state
                 field = state["fields"]["card"]
                 self.assertEqual(tuple(state["picker"]["values"]), (str(empty), str(installed)))
                 self.assertEqual(field.get(), str(installed))
-                refresh = next(button for frame in state["header"].winfo_children()
-                               if frame.winfo_class() == "TFrame" for button in frame.winfo_children()
-                               if button.cget("text") == "Refresh")
+                refresh = state["buttons"]["refresh"]
                 field.set(str(empty))
                 refresh.invoke()
+                self.wait_for_card_probe(root)
                 self.assertEqual(field.get(), str(empty), "Refresh keeps a manual selection")
                 field.set("")
                 refresh.invoke()
+                self.wait_for_card_probe(root)
                 self.assertEqual(field.get(), str(installed), "Refresh picks a card when none is selected")
-                explicit = sleekmenu_gui.build(card=str(empty))
+                with mock.patch.object(sleekmenu_gui, "preferred_card") as preferred:
+                    explicit = sleekmenu_gui.build(card=str(empty))
+                    self.wait_for_card_probe(explicit)
+                    preferred.assert_not_called()
                 self.assertEqual(explicit.sleekmenu_state["fields"]["card"].get(), str(empty))
                 (empty / "ED64").mkdir()
                 (empty / "ED64" / "OS64.v64").write_bytes(b"stock OS")
                 field.set("")
                 refresh.invoke()
+                self.wait_for_card_probe(root)
                 self.assertEqual(field.get(), "", "Refresh leaves multiple matching cards unselected")
                 ambiguous = sleekmenu_gui.build()
+                self.wait_for_card_probe(ambiguous)
                 self.assertEqual(ambiguous.sleekmenu_state["fields"]["card"].get(), "",
                                  "startup leaves multiple matching cards unselected")
+
+    def test_card_probes_leave_startup_and_refresh_responsive_and_apply_on_tks_thread(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            card = Path(scratch)
+            entered, release = threading.Event(), threading.Event()
+            probe_threads = []
+            listing_threads = []
+            tk_thread = threading.get_ident()
+
+            def volumes():
+                listing_threads.append(threading.get_ident())
+                return [card]
+
+            def preferred(cards):
+                probe_threads.append(threading.get_ident())
+                entered.set()
+                release.wait(5)
+                return cards[0]
+
+            self.addCleanup(release.set)
+            with mock.patch.object(sleekmenu_gui, "removable_volumes", side_effect=volumes), \
+                 mock.patch.object(sleekmenu_gui, "preferred_card", side_effect=preferred):
+                root = sleekmenu_gui.build()
+                state = root.sleekmenu_state
+                field = state["fields"]["card"]
+                applied_threads = []
+                field.trace_add("write", lambda *_args: applied_threads.append(threading.get_ident()))
+                for phase in ("startup", "Refresh"):
+                    with self.subTest(phase=phase):
+                        if phase == "Refresh":
+                            field.set("")
+                            entered.clear()
+                            release.clear()
+                            state["buttons"]["refresh"].invoke()
+                        self.assertTrue(entered.wait(3), "the card probe did not start")
+                        self.assertEqual(field.get(), "", "no result while the probe is blocked")
+                        heartbeat = []
+                        root.after(0, lambda: heartbeat.append(True))
+                        root.update()
+                        self.assertEqual(heartbeat, [True], "Tk still handles events during the probe")
+                        self.assertNotEqual(probe_threads[-1], tk_thread)
+                        self.assertNotEqual(listing_threads[-1], tk_thread)
+                        release.set()
+                        self.wait_for_card_probe(root)
+                        self.assertEqual(field.get(), str(card))
+                self.assertTrue(applied_threads)
+                self.assertEqual(set(applied_threads), {tk_thread})
+
+    def test_a_pending_card_probe_keeps_a_manual_selection(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            detected, manual = [Path(scratch) / name for name in ("detected", "manual")]
+            detected.mkdir()
+            manual.mkdir()
+            entered, release = threading.Event(), threading.Event()
+
+            def preferred(_cards):
+                entered.set()
+                release.wait(5)
+                return detected
+
+            self.addCleanup(release.set)
+            with mock.patch.object(sleekmenu_gui, "removable_volumes", return_value=[detected]), \
+                 mock.patch.object(sleekmenu_gui, "preferred_card", side_effect=preferred):
+                root = sleekmenu_gui.build()
+                state = root.sleekmenu_state
+                self.assertTrue(entered.wait(3))
+                state["fields"]["card"].set(str(manual))
+                release.set()
+                self.wait_for_card_probe(root)
+                self.assertEqual(state["fields"]["card"].get(), str(manual))
+                self.assertEqual(tuple(state["picker"]["values"]), (str(detected),))
+
+    def test_an_old_refresh_cannot_select_a_card_or_replace_the_current_dropdown(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            old, new = [Path(scratch) / name for name in ("old", "new")]
+            old.mkdir()
+            new.mkdir()
+            entered, release = threading.Event(), threading.Event()
+            workers = []
+
+            def volumes():
+                workers.append(threading.current_thread())
+                if len(workers) == 1:
+                    entered.set()
+                    release.wait(5)
+                    return [old]
+                return [new]
+
+            self.addCleanup(release.set)
+            with mock.patch.object(sleekmenu_gui, "removable_volumes", side_effect=volumes), \
+                 mock.patch.object(sleekmenu_gui, "preferred_card", side_effect=lambda cards: cards[0]):
+                root = sleekmenu_gui.build()
+                state = root.sleekmenu_state
+                self.assertTrue(entered.wait(3))
+                state["buttons"]["refresh"].invoke()
+                self.wait_for_card_probe(root)
+                self.assertEqual(state["fields"]["card"].get(), str(new))
+                state["fields"]["card"].set("")
+                release.set()
+                workers[0].join(3)
+                self.assertFalse(workers[0].is_alive())
+                settled = []
+                root.after(150, lambda: settled.append(True))
+                self.wait_for(root, lambda: bool(settled))
+                self.assertEqual(state["fields"]["card"].get(), "")
+                self.assertEqual(tuple(state["picker"]["values"]), (str(new),))
+
+    def test_the_window_can_close_while_a_card_probe_is_pending(self):
+        entered, release = threading.Event(), threading.Event()
+        workers = []
+
+        def preferred(_cards):
+            workers.append(threading.current_thread())
+            entered.set()
+            release.wait(5)
+            return None
+
+        self.addCleanup(release.set)
+        with mock.patch.object(sleekmenu_gui, "removable_volumes", return_value=[]), \
+             mock.patch.object(sleekmenu_gui, "preferred_card", side_effect=preferred), \
+             mock.patch.object(threading, "excepthook") as thread_error:
+            root = sleekmenu_gui.build()
+            self.assertTrue(entered.wait(3))
+            root.destroy()
+            release.set()
+            workers[0].join(3)
+            self.assertFalse(workers[0].is_alive())
+            thread_error.assert_not_called()
 
     def test_where_the_games_are_is_a_path_from_the_cards_root(self):
         with tempfile.TemporaryDirectory() as scratch:
