@@ -952,6 +952,7 @@ class WindowTests(unittest.TestCase):
         self.assertNotEqual(chosen_width, default_width)
 
         def resized(width: int) -> int:
+            window_width = root.winfo_width()
             pane_width = games.panes.winfo_width()
             list_width = games.tree.master.winfo_width()
             root.geometry(f"{width}x{root.winfo_height()}")
@@ -963,6 +964,9 @@ class WindowTests(unittest.TestCase):
                     break
                 time.sleep(0.02)
             root.update()
+            if root.winfo_width() == window_width:
+                root.destroy()
+                self.skipTest("the window manager did not allow the window width to change")
             change = games.panes.winfo_width() - pane_width
             self.assertEqual(games.detail.winfo_width(), chosen_width, width)
             self.assertEqual(games.tree.master.winfo_width() - list_width, change, width)
