@@ -113,10 +113,17 @@ def removable_volumes(platform: str = sys.platform, listdir=os.listdir, is_root=
 
 def preferred_card(cards: list[Path]) -> Path | None:
     """Pick a unique installation, then a unique card with games, then the
-    only listed card. Stop at either ambiguous tier."""
-    matching = [card for card in cards
-                if releases.card_browser(card).state not in (releases.MISSING, releases.OTHER)
-                or direct_boot.cart_of(card)[0]]
+    only listed card. Stop at an unknown result or either ambiguous tier."""
+    matching = []
+    for card in cards:
+        browser = releases.card_browser(card)
+        if browser.state == releases.UNKNOWN:
+            return None
+        cart, _ = direct_boot.cart_of(card)
+        if cart is None:
+            return None
+        if browser.state not in (releases.MISSING, releases.OTHER) or cart:
+            matching.append(card)
     if len(matching) > 1:
         return None
     if len(matching) == 1:
@@ -229,6 +236,8 @@ def browser_line(browser: releases.Browser, keep: bool = True, offline: bool = F
     mine = version.VERSION
     if not keep:
         return "SleekMenu on the card won't be changed."
+    if browser.state == releases.UNKNOWN:
+        return "SleekMenu on the card couldn't be inspected, so it won't be replaced."
     if browser.state == releases.CURRENT:
         return f"SleekMenu {mine} is installed and up to date."
     if browser.state == releases.NEWER:

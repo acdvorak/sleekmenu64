@@ -98,6 +98,76 @@ class VolumeTests(unittest.TestCase):
                         self.assertIsNone(sleekmenu_gui.preferred_card(cards))
                 has_games.assert_not_called()
 
+    def test_an_unreadable_browser_prevents_selection_before_the_game_scan(self):
+        from tests.test_releases import sleekmenu
+        with tempfile.TemporaryDirectory() as scratch:
+            unreadable, installed, empty = [Path(scratch) / name for name in ("A", "B", "C")]
+            for card in (unreadable, installed, empty):
+                card.mkdir()
+            for card in (unreadable, installed):
+                (card / card_layout.BROWSER_ROM).write_bytes(sleekmenu())
+            read_bytes = Path.read_bytes
+
+            def read(path):
+                if path == unreadable / card_layout.BROWSER_ROM:
+                    raise OSError(5, "cannot read ROM")
+                return read_bytes(path)
+
+            releases._read.clear()
+            with mock.patch.object(Path, "read_bytes", read), \
+                 mock.patch.object(sleekmenu_gui, "has_games", return_value=False) as has_games:
+                for cards in ([unreadable, installed], [installed, unreadable],
+                              [unreadable], [unreadable, empty]):
+                    with self.subTest(cards=cards):
+                        self.assertIsNone(sleekmenu_gui.preferred_card(cards))
+                has_games.assert_not_called()
+
+    def test_unreadable_installation_folders_prevent_selection_before_the_game_scan(self):
+        from tests.test_releases import sleekmenu
+        for folder in ("", "ED64", "ED64/sysdata"):
+            with self.subTest(folder=folder), tempfile.TemporaryDirectory() as scratch:
+                unreadable, installed = Path(scratch) / "A", Path(scratch) / "B"
+                (unreadable / "ED64" / "sysdata").mkdir(parents=True)
+                (unreadable / "ED64" / "sysdata" / "config.ini").write_text("[options]\n")
+                installed.mkdir()
+                (installed / card_layout.BROWSER_ROM).write_bytes(sleekmenu())
+                listdir = os.listdir
+
+                def listing(path):
+                    if Path(path) == unreadable / folder:
+                        raise OSError(5, "cannot read directory")
+                    return listdir(path)
+
+                with mock.patch.object(os, "listdir", side_effect=listing), \
+                     mock.patch.object(sleekmenu_gui, "has_games", return_value=False) as has_games:
+                    for cards in ([unreadable, installed], [installed, unreadable], [unreadable]):
+                        with self.subTest(cards=cards):
+                            self.assertIsNone(sleekmenu_gui.preferred_card(cards))
+                    has_games.assert_not_called()
+
+    def test_uninspectable_firmware_metadata_prevents_selection(self):
+        from tests.test_releases import sleekmenu
+        for target in ("ED64", "ED64/OS64.v64"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as scratch:
+                unreadable, installed = Path(scratch) / "A", Path(scratch) / "B"
+                (unreadable / "ED64").mkdir(parents=True)
+                (unreadable / "ED64" / "OS64.v64").write_bytes(b"stock OS")
+                installed.mkdir()
+                (installed / card_layout.BROWSER_ROM).write_bytes(sleekmenu())
+                stat = Path.stat
+
+                def metadata(path, *args, **kwargs):
+                    if path == unreadable / target:
+                        raise OSError(5, "cannot inspect firmware")
+                    return stat(path, *args, **kwargs)
+
+                with mock.patch.object(Path, "stat", metadata), \
+                     mock.patch.object(sleekmenu_gui, "has_games", return_value=False) as has_games:
+                    for cards in ([unreadable, installed], [installed, unreadable], [unreadable]):
+                        with self.subTest(cards=cards):
+                            self.assertIsNone(sleekmenu_gui.preferred_card(cards))
+                    has_games.assert_not_called()
+
     def test_without_an_installation_or_games_only_a_single_card_is_selected(self):
         with tempfile.TemporaryDirectory() as scratch:
             first, second = Path(scratch) / "A", Path(scratch) / "B"
@@ -243,6 +313,11 @@ class FieldTests(unittest.TestCase):
 
 class CardStatusTests(unittest.TestCase):
     """What the Card tab says about a card, and what its button is called."""
+
+    def test_an_unreadable_browser_is_reported_without_promising_replacement(self):
+        browser = releases.Browser(releases.UNKNOWN)
+        self.assertEqual(sleekmenu_gui.browser_line(browser),
+                         "SleekMenu on the card couldn't be inspected, so it won't be replaced.")
 
     def test_no_card_and_an_empty_card(self):
         nothing = sleekmenu_gui.card_status(None)
