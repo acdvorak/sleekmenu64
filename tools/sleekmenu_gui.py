@@ -3,13 +3,13 @@
 """The Game Catalog Manager's window: the same run as
 sleekmenu-catalog-manager.pyz, without a terminal.
 
-Pick the card (found on its own when it is the only removable disk), read
-what is on it, press the one button -- Set up card the first time, Update
-card after -- and watch the run go through its four steps, with a Stop if
-it is taking too long. What the card lacks is fetched by the run itself;
-the choices most people never change sit beside the button. Nothing here
-decides anything about the card: the window collects a handful of answers
-and hands them to tools/sleekmenu_prep.run(), which is what the command
+Pick the card (selected automatically by its installed menu, then games,
+then being the only card), read what is on it, press the one button -- Set up
+card the first time, Update card after -- and watch the run go through its four
+steps, with a Stop if it is taking too long. What the card lacks is fetched by
+the run itself; the choices most people never change sit beside the button.
+Nothing here decides anything about the card: the window collects a handful of
+answers and hands them to tools/sleekmenu_prep.run(), which is what the command
 line runs. The downloadable builds are this file frozen with its Python;
 from a checkout it is `python3 tools/sleekmenu_gui.py`, or
 `python3 sleekmenu-catalog-manager.pyz --gui`.
@@ -96,7 +96,8 @@ def removable_volumes(platform: str = sys.platform, listdir=os.listdir, is_root=
     if platform == "darwin":
         for name in sorted(_listing(listdir, "/Volumes")):
             path = Path("/Volumes") / name
-            if name.lower() not in MAC_SYSTEM_VOLUMES and not is_root(path):
+            if (name.lower() not in MAC_SYSTEM_VOLUMES
+                    and not name.lower().startswith("com.apple.timemachine.") and not is_root(path)):
                 found.append(path)
     elif platform == "win32":
         found.extend(_windows_removable())
@@ -108,6 +109,36 @@ def removable_volumes(platform: str = sys.platform, listdir=os.listdir, is_root=
         for name in sorted(_listing(listdir, "/mnt")):
             found.append(Path("/mnt") / name)
     return found
+
+
+def preferred_card(cards: list[Path]) -> Path | None:
+    """Pick a unique installation, then a unique card with games, then the
+    only listed card. Stop at either ambiguous tier."""
+    matching = [card for card in cards
+                if releases.card_browser(card).state not in (releases.MISSING, releases.OTHER)
+                or direct_boot.cart_of(card)[0]]
+    if len(matching) > 1:
+        return None
+    if len(matching) == 1:
+        return matching[0]
+    with_games = [card for card in cards if has_games(card)]
+    if len(with_games) > 1:
+        return None
+    if len(with_games) == 1:
+        return with_games[0]
+    return cards[0] if len(cards) == 1 else None
+
+
+def has_games(card: Path) -> bool:
+    """Look for .z64 or .n64 files at the root or two folders below it."""
+    for directory, subdirs, files in os.walk(card):
+        depth = len(Path(directory).relative_to(card).parts)
+        subdirs[:] = ([] if depth >= 2 else
+                      [name for name in subdirs if not card_layout.hidden(name)])
+        if any(not card_layout.hidden(name) and Path(name).suffix.casefold() in (".z64", ".n64")
+               for name in files):
+            return True
+    return False
 
 
 def _listing(listdir, path: str) -> list[str]:
@@ -2625,8 +2656,10 @@ def build(smoke: bool = False, card: str = "", metadata: str = "", song: str = "
     def refresh_cards() -> None:
         found = removable_volumes()
         card_box["values"] = [str(p) for p in found]
-        if len(found) == 1 and not card_var.get():
-            card_var.set(str(found[0]))
+        if not card_var.get():
+            chosen = preferred_card(found)
+            if chosen is not None:
+                card_var.set(str(chosen))
         state["shown_card"] = None          # read the card again, even the same one
         state["walk"] = None
         on_card_change()
