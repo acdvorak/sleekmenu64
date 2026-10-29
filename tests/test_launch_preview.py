@@ -978,7 +978,7 @@ class VendoredBootTests(unittest.TestCase):
         self.assertIn("GNU AFFERO GENERAL PUBLIC LICENSE", licence)
         vendored = (self.VENDOR / "VENDORED.md").read_text(encoding="utf-8")
         self.assertIn("AGPL-3.0", vendored)
-        self.assertIn("6407ab15f6c19d1bf9ded5104c1c8b3c36471379", vendored)
+        self.assertIn("7fcef17d92eef786482673d55b0a8bf7894f8a31", vendored)
 
     def test_compat_shim_matches_libdragon_preview_values(self):
         """boot.c needs three C0_STATUS bits that trunk libdragon lacks. The
