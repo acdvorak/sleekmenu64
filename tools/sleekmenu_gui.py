@@ -121,7 +121,10 @@ def preferred_card(cards: list[Path]) -> Path | None:
         return None
     if len(matching) == 1:
         return matching[0]
-    with_games = [card for card in cards if has_games(card)]
+    scanned = [(card, has_games(card)) for card in cards]
+    if any(result is None for _, result in scanned):
+        return None
+    with_games = [card for card, result in scanned if result]
     if len(with_games) > 1:
         return None
     if len(with_games) == 1:
@@ -129,16 +132,17 @@ def preferred_card(cards: list[Path]) -> Path | None:
     return cards[0] if len(cards) == 1 else None
 
 
-def has_games(card: Path) -> bool:
-    """Look for .z64 or .n64 files at the root or two folders below it."""
-    for directory, subdirs, files in os.walk(card):
+def has_games(card: Path) -> bool | None:
+    """Look for games at the root or two folders below; None means an incomplete scan."""
+    scan_errors: list[OSError] = []
+    for directory, subdirs, files in os.walk(card, onerror=scan_errors.append):
         depth = len(Path(directory).relative_to(card).parts)
         subdirs[:] = ([] if depth >= 2 else
                       [name for name in subdirs if not card_layout.hidden(name)])
         if any(not card_layout.hidden(name) and Path(name).suffix.casefold() in (".z64", ".n64")
                for name in files):
             return True
-    return False
+    return None if scan_errors else False
 
 
 def _listing(listdir, path: str) -> list[str]:
