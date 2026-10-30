@@ -38,7 +38,14 @@ class BuildMetadataTests(unittest.TestCase):
     def test_catalog_paths_work_through_a_symlinked_card_root(self):
         write_rom(self.roms / "Game (USA).z64", 1, 2)
         alias = self.card / "card-alias"
-        alias.symlink_to(self.card.resolve(), target_is_directory=True)
+        try:
+            alias.symlink_to(self.card.resolve(), target_is_directory=True)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                self.skipTest(
+                    "creating a symlink requires Windows Developer Mode or elevated privileges"
+                )
+            raise
         document, _ = self.build(roms=alias / "N64", sd_root=alias)
         self.assertEqual(document["games"][0]["path"], "N64/Game (USA).z64")
 
