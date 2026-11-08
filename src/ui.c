@@ -796,7 +796,7 @@ static void draw_tile(surface_t *dst, int x, int y, const uint16_t *tile) {
         put_pixels(dst, x, y + row, tile + (size_t)row * SM_UI_TILE_WIDTH, SM_UI_TILE_WIDTH);
 }
 
-/* The first character of an item's title, folded and reduced to a bucket:
+/* The first character of an item's effective sort title, folded to a bucket:
    letters are themselves, everything else -- digits, brackets, the sort
    prefixes people put on ROM filenames -- shares one bucket ahead of A. That
    keeps "007 GoldenEye", "1080 Snowboarding" and "[BETA] whatever" together
@@ -805,8 +805,8 @@ static char flow_initial(const sm_catalog_t *catalog, uint32_t item) {
     sm_game_t game;
     char c;
     if (item & SM_UI_FOLDER_BIT) return '#';
-    if (!catalog_get(catalog, item, &game) || !game.title[0]) return '#';
-    c = game.title[0];
+    if (!catalog_get(catalog, item, &game)) return '#';
+    c = sm_game_sort_title(&game)[0];
     if (c >= 'a' && c <= 'z') c = (char)(c - 32);
     return (c >= 'A' && c <= 'Z') ? c : '#';
 }
@@ -993,7 +993,7 @@ static void settle_on_a_new_list(sm_ui_t *ui, const sm_catalog_t *catalog) {
     unload_slots(ui);
 }
 
-/* History is the one view that is not in catalog order, so it gets its own
+/* History keeps recency order instead of alphabetical order, so it gets its own
    pass. One walk of the catalog asking each game where it sits in the list,
    dropped into a slot by that position -- rather than fifteen walks looking
    for one path each. Gaps are left by games that have since come off the
@@ -1013,37 +1013,76 @@ static void rebuild_history(sm_ui_t *ui, const sm_catalog_t *catalog) {
         if (slots[i] != UINT32_MAX) ui->items[ui->item_count++] = slots[i];
 }
 
-/* An extra -- a file the catalog does not know, found on the card -- sits
-   past the catalog's own entries, so it comes out of the loops below after
-   every catalogued game in its folder. Each is moved back to where its name
-   sorts: a game copied on last week belongs under its letter, not in a heap
-   at the bottom. The catalog is in path order, and within one folder that
-   is name order, so a path comparison is the same ordering. */
-static bool item_sorts_after(const sm_catalog_t *catalog, uint32_t item, uint32_t other) {
-    sm_game_t a, b;
-    if (!catalog_get(catalog, item & ~SM_UI_FOLDER_BIT, &a) ||
-        !catalog_get(catalog, other & ~SM_UI_FOLDER_BIT, &b)) return false;
-    return strcasecmp(a.path, b.path) > 0;
+/* The builder spells both title keys in ASCII. Folding only ASCII here
+   gives exactly the Python ordering regardless of the console's locale. */
+static unsigned char sort_fold(unsigned char c) {
+    return c >= 'A' && c <= 'Z' ? (unsigned char)(c + ('a' - 'A')) : c;
 }
 
-/* A merge of two sorted runs, the catalog's and the extras', from the back:
-   one pass, with only the extras copied aside. A thousand new files in a
-   folder of thousands is the case that decides this; an insertion sort
-   there is seconds on the console. */
-static void place_extras(sm_ui_t *ui, const sm_catalog_t *catalog, uint32_t begin, uint32_t end) {
-    static uint32_t aside[SM_SCAN_MAX_EXTRAS];
-    uint32_t first_extra = end, count, write;
-    while (first_extra > begin && (ui->items[first_extra - 1u] & ~SM_UI_FOLDER_BIT) >= catalog->count)
-        first_extra--;
-    count = end - first_extra;
-    if (!count || count > SM_SCAN_MAX_EXTRAS) return;
-    memcpy(aside, &ui->items[first_extra], count * sizeof(aside[0]));
-    write = end;
-    while (count) {
-        uint32_t extra = aside[count - 1u];
-        if (first_extra > begin && item_sorts_after(catalog, ui->items[first_extra - 1u], extra))
-            ui->items[--write] = ui->items[--first_extra];
-        else { ui->items[--write] = extra; count--; }
+static int compare_sort_text(const char *a, const char *b) {
+    while (*a && sort_fold((unsigned char)*a) == sort_fold((unsigned char)*b)) { a++; b++; }
+    return (int)sort_fold((unsigned char)*a) - (int)sort_fold((unsigned char)*b);
+}
+
+static int compare_items(const sm_ui_t *ui, const sm_catalog_t *catalog,
+    uint32_t left, uint32_t right) {
+    sm_game_t a, b;
+    int order;
+    bool have_a = catalog_get(catalog, left & ~SM_UI_FOLDER_BIT, &a);
+    bool have_b = catalog_get(catalog, right & ~SM_UI_FOLDER_BIT, &b);
+    if (!have_a || !have_b) return have_a ? -1 : have_b ? 1 : 0;
+    if (left & SM_UI_FOLDER_BIT) {
+        /* Compare the actual component, never the representative game's
+           title. Stop at its slash so a game's filename cannot move a folder. */
+        const char *part_a = relative_part(a.path, ui->folder);
+        const char *part_b = relative_part(b.path, ui->folder);
+        size_t at = 0;
+        while (part_a[at] != '/' && part_b[at] != '/' &&
+            sort_fold((unsigned char)part_a[at]) == sort_fold((unsigned char)part_b[at])) at++;
+        order = (int)(part_a[at] == '/' ? 0 : sort_fold((unsigned char)part_a[at])) -
+            (int)(part_b[at] == '/' ? 0 : sort_fold((unsigned char)part_b[at]));
+        if (order) return order;
+        /* Case variants remain distinct folders; compare their exact bytes. */
+        at = 0;
+        while (part_a[at] != '/' && part_b[at] != '/' && part_a[at] == part_b[at]) at++;
+        return (int)(part_a[at] == '/' ? 0 : (unsigned char)part_a[at]) -
+            (int)(part_b[at] == '/' ? 0 : (unsigned char)part_b[at]);
+    }
+    order = compare_sort_text(sm_game_sort_title(&a), sm_game_sort_title(&b));
+    if (!order) order = compare_sort_text(a.title, b.title);
+    /* strcmp compares unsigned bytes, matching Python's UTF-8 path key. */
+    return order ? order : strcmp(a.path, b.path);
+}
+
+/* Sort indices only: catalog storage remains in path order. Heapsort has a
+   bounded O(n log n) cost for large libraries, needs no allocation and sorts
+   catalogued games together with newly scanned files in a single range. */
+static void sift_items(sm_ui_t *ui, const sm_catalog_t *catalog,
+    uint32_t begin, uint32_t count, uint32_t root) {
+    for (;;) {
+        uint32_t child;
+        uint32_t saved;
+        if (root >= count / 2u) return;
+        child = root * 2u + 1u;
+        if (child + 1u < count && compare_items(ui, catalog,
+            ui->items[begin + child], ui->items[begin + child + 1u]) < 0) child++;
+        if (compare_items(ui, catalog, ui->items[begin + root], ui->items[begin + child]) >= 0) return;
+        saved = ui->items[begin + root];
+        ui->items[begin + root] = ui->items[begin + child];
+        ui->items[begin + child] = saved;
+        root = child;
+    }
+}
+
+static void sort_items(sm_ui_t *ui, const sm_catalog_t *catalog, uint32_t begin, uint32_t end) {
+    uint32_t count = end - begin;
+    if (count < 2u) return;
+    for (uint32_t root = count / 2u; root > 0u; root--) sift_items(ui, catalog, begin, count, root - 1u);
+    while (count > 1u) {
+        uint32_t saved = ui->items[begin];
+        ui->items[begin] = ui->items[begin + --count];
+        ui->items[begin + count] = saved;
+        sift_items(ui, catalog, begin, count, 0u);
     }
 }
 
@@ -1117,10 +1156,8 @@ static void rebuild(sm_ui_t *ui, sm_catalog_t *catalog) {
         if (!part) continue;
         if (ui->flat || !strchr(part, '/')) ui->items[ui->item_count++] = i;
     }
-    if (catalog->extras.count) {
-        place_extras(ui, catalog, 0, folders_end);
-        place_extras(ui, catalog, folders_end, ui->item_count);
-    }
+    sort_items(ui, catalog, 0, folders_end);
+    sort_items(ui, catalog, folders_end, ui->item_count);
     settle_on_a_new_list(ui, catalog);
     if (remembered && !ui->flat) announce_extras(ui, catalog);
 }

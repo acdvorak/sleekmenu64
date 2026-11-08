@@ -9,15 +9,14 @@
 #include <strings.h>
 #include <libdragon.h>
 
-/* Format 2: tools/build_catalog.py. A record is six string offsets, the
-   year, three bytes, a reserved byte and the screenshot set; format 1 had
-   no description and 28-byte records, and is refused rather than misread --
-   a card built by an older tool simply gets rebuilt. The set number came
-   later, in what had been padding: a catalog from before it reads 0 there,
-   which is no screenshots. */
+/* Format 3: tools/build_catalog.py. The first 32 bytes retain six string
+   offsets, the year, three bytes, a reserved byte and the screenshot set.
+   A seventh string offset at byte 32 holds the optional Sort Title, making
+   each record 36 bytes. Older catalogs are refused rather than misread --
+   a card built by an older tool simply gets rebuilt. */
 #define SM_HEADER_SIZE 32u
-#define SM_FORMAT_VERSION 2u
-#define SM_RECORD_SIZE 32u
+#define SM_FORMAT_VERSION 3u
+#define SM_RECORD_SIZE 36u
 
 static uint16_t read_u16(const uint8_t *p) {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
@@ -111,6 +110,7 @@ bool catalog_get(const sm_catalog_t *catalog, uint32_t index, sm_game_t *game) {
     if (index >= catalog->count) return sm_extras_get(&catalog->extras, index - catalog->count, game);
     if (catalog->discovery_mode) {
         game->title = catalog->discovered[index].title;
+        game->sort_title = "";
         game->path = catalog->discovered[index].path;
         game->cover = "";
         game->publisher = "";
@@ -136,8 +136,9 @@ bool catalog_get(const sm_catalog_t *catalog, uint32_t index, sm_game_t *game) {
     game->regions = record[27];
     game->flags = record[28];
     game->shots = read_u16(record + 30);
+    game->sort_title = catalog_string(catalog, read_u32(record + 32));
     return game->title && game->path && game->cover && game->publisher && game->genre &&
-        game->description;
+        game->description && game->sort_title;
 }
 
 /* Keep discovery memory predictable on the console. Paths waiting to be scanned

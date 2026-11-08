@@ -32,6 +32,8 @@ typedef struct {
 
 typedef struct {
     const char *title;
+    /* Optional ordering override; the visible title and ROM identity stay unchanged. */
+    const char *sort_title;
     const char *path;
     const char *cover;
     const char *publisher;
@@ -48,6 +50,11 @@ typedef struct {
        tools/shots.py numbers the sets. */
     uint16_t shots;
 } sm_game_t;
+
+/* Packed titles are already in the console's ASCII spelling. */
+static inline const char *sm_game_sort_title(const sm_game_t *game) {
+    return game->sort_title && game->sort_title[0] ? game->sort_title : game->title;
+}
 
 static inline sm_kind_t sm_game_kind(const sm_game_t *game) {
     return (sm_kind_t)((game->flags & SM_KIND_MASK) >> SM_KIND_SHIFT);
@@ -101,6 +108,7 @@ static inline bool sm_extras_get(const sm_extras_t *extras, uint32_t index, sm_g
     if (extras == NULL || game == NULL || index >= extras->count) return false;
     extra = &extras->entries[index];
     game->title = extra->title;
+    game->sort_title = "";
     game->path = extra->path;
     game->cover = "";
     game->publisher = "";
