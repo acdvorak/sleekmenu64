@@ -46,7 +46,7 @@ DETECTED = "detected"
 
 NONE = "none"
 
-FIELDS = ("cover", "title", "description", "genre", "publisher", "year", "players")
+FIELDS = ("cover", "title", "sort_title", "description", "genre", "publisher", "year", "players")
 
 
 def yours_code(code: str) -> str:

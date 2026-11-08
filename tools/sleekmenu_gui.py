@@ -709,9 +709,10 @@ STATE_ASIDE = "aside"        # set aside by the tool: not a ROM
 STATE_PENDING = "pending"    # a catalogued game with an edit the next update will apply
 
 #: What a game is, as its owner can change it, and the blank of each.
-FIELDS = {"title": "", "genre": "", "publisher": "", "year": 0, "players": 0, "regions": [], "kind": "",
+FIELDS = {"title": "", "sort_title": "", "genre": "", "publisher": "", "year": 0, "players": 0, "regions": [], "kind": "",
           "description": ""}
-FIELD_LABELS = {"title": "Title", "genre": "Genre", "publisher": "Publisher", "year": "Year", "kind": "Kind",
+FIELD_LABELS = {"title": "Title", "sort_title": "Sort Title", "genre": "Genre", "publisher": "Publisher",
+                "year": "Year", "kind": "Kind",
                 "players": "Players", "regions": "Region", "description": "Description", "cover": "box",
                 "shot_title": "title screen", "shot_snap": "in-game picture"}
 #: The two screenshots (tools/shots.py), as the window names them.
@@ -827,7 +828,7 @@ def _plain(name: str, value):
     return " ".join(str(value or "").split())
 
 
-def edit_values(game: dict, own, form: dict) -> tuple[str, str, dict]:
+def edit_values(game: dict, own, form: dict, *, sort_title_default: bool | None = None) -> tuple[str, str, dict]:
     """What goes in the owner's file for a game, from the panel's fields as
     they stand: the title, the description and the facts.
 
@@ -846,6 +847,17 @@ def edit_values(game: dict, own, form: dict) -> tuple[str, str, dict]:
     for name, blank in FIELDS.items():
         value = _plain(name, form.get(name, blank))
         if value in ("", 0, []):
+            continue
+        if name == "sort_title":
+            if sort_title_default is True:
+                continue
+            # The populated default is the displayed Title, including a
+            # pending edit. An untouched explicit value stays independent
+            # even if it happens to spell that same Title.
+            explicit = name in mine or bool(_plain(name, game.get(name)))
+            default = _plain("title", form.get("title", game.get("title", "")))
+            if sort_title_default is False or explicit or value != default:
+                out[name] = value
             continue
         if name in mine or value != _plain(name, game.get(name, blank)):
             out[name] = value
@@ -1489,6 +1501,12 @@ class GamesTab:
         # the panel: the selected game, every field as the console shows it
         self.file_name = tk.StringVar()
         self.title = tk.StringVar()
+        self.sort_title = tk.StringVar()
+        self._setting_fields = False
+        self._sort_title_default = True
+        self._sort_title_edited = False
+        self.title.trace_add("write", self._title_changed)
+        self.sort_title.trace_add("write", self._sort_title_changed)
         self.genre = tk.StringVar()
         self.publisher = tk.StringVar()
         self.year = tk.StringVar()
@@ -1609,21 +1627,26 @@ class GamesTab:
         label(form, "title").grid(row=0, column=0, sticky="w")
         self.title_entry = ttk.Entry(form, textvariable=self.title, width=12)
         self.title_entry.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        label(form, "sort_title").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.sort_title_entry = ttk.Entry(form, textvariable=self.sort_title, width=12)
+        self.sort_title_entry.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(4, 0))
+        self.sort_title_entry.bind("<FocusOut>", self._finish_sort_title_edit)
+        self.sort_title_entry.bind("<Return>", self._finish_sort_title_edit)
         # The genres and publishers already on the card are offered;
         # anything else can be typed.
-        label(form, "genre").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        label(form, "genre").grid(row=2, column=0, sticky="w", pady=(4, 0))
         self.genre_box = ttk.Combobox(form, textvariable=self.genre, width=12)
-        self.genre_box.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        label(form, "publisher").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.genre_box.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=(4, 0))
+        label(form, "publisher").grid(row=3, column=0, sticky="w", pady=(4, 0))
         self.publisher_box = ttk.Combobox(form, textvariable=self.publisher, width=12)
-        self.publisher_box.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        label(form, "year").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self.publisher_box.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=(4, 0))
+        label(form, "year").grid(row=4, column=0, sticky="w", pady=(4, 0))
         self.year_entry = ttk.Entry(form, textvariable=self.year, width=6)
-        self.year_entry.grid(row=3, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
-        label(form, "players").grid(row=4, column=0, sticky="w", pady=(6, 0))
+        self.year_entry.grid(row=4, column=1, sticky="w", padx=(6, 0), pady=(4, 0))
+        label(form, "players").grid(row=5, column=0, sticky="w", pady=(4, 0))
         # Players and the kind share a row: both are picked from a short list.
         pair = ttk.Frame(form)
-        pair.grid(row=4, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
+        pair.grid(row=5, column=1, sticky="w", padx=(6, 0), pady=(4, 0))
         self.players_box = ttk.Combobox(pair, textvariable=self.players, width=3, state="readonly",
                                         values=("", "1", "2", "3", "4"))
         self.players_box.pack(side="left")
@@ -1632,9 +1655,9 @@ class GamesTab:
                                      values=tuple(kinds.NAMES[kind] for kind in kinds.KINDS))
         self.kind_box.pack(side="left")
         # The three regions take the column's whole width, under their label.
-        label(form, "regions").grid(row=5, column=0, sticky="w", pady=(6, 0))
+        label(form, "regions").grid(row=6, column=0, sticky="w", pady=(4, 0))
         region_row = ttk.Frame(form)
-        region_row.grid(row=6, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        region_row.grid(row=7, column=0, columnspan=2, sticky="w", pady=(2, 0))
         self.region_checks = []
         for name in REGION_ORDER:
             check = ttk.Checkbutton(region_row, text=REGION_LABELS[name], variable=self.regions[name])
@@ -1665,14 +1688,15 @@ class GamesTab:
         self.undo_button.pack(side="right", padx=(0, 6))
         ttk.Label(right, textvariable=self.edit_note, foreground=muted, justify="left", wraplength=wrap).grid(
             row=6, column=0, sticky="w", pady=(4, 0))
-        self.inputs = [self.title_entry, self.genre_box, self.publisher_box, self.year_entry,
+        self.inputs = [self.title_entry, self.sort_title_entry, self.genre_box, self.publisher_box, self.year_entry,
                        *self.region_checks, self.box_button, self.save_button]
         self.show_game(None)
 
     # -- loading -----------------------------------------------------------
 
     def reload(self) -> None:
-        """Read catalog.json and covers.pak off the card again."""
+        """Read catalog.json and covers.pak again, keeping the selected ROM."""
+        keep = self.shown_path
         card = self.card_of()
         self.document, self.covers, self.shots, self.games = None, None, None, {}
         if card is None:
@@ -1695,7 +1719,10 @@ class GamesTab:
         self.refresh_pending()
         self.shown_path = None
         self.fill()
-        self.show_game(None)
+        if keep is not None and self.tree.exists(keep):
+            self.back_to(keep)
+        else:
+            self.show_game(None)
 
     def refresh_pending(self) -> None:
         """What the owner's files on the card would change at the next
@@ -1728,10 +1755,18 @@ class GamesTab:
     def effective(self, game: dict) -> dict:
         """The game as the next update will catalog it: the record with
         the owner's pending fields laid over it."""
+        if game.get("state") == STATE_WAITING:
+            own = self.own_text(game)
+            if own is not None:
+                game = dict(game, **own.facts, title=own.title or str(game.get("title", "")),
+                            description=own.description)
         pending = self.pending.get(str(game.get("path", "")))
-        if pending is None or not pending.fields:
+        if pending is None:
             return game
-        return dict(game, **pending.fields)
+        shown = dict(game, **pending.fields)
+        if "sort_title" in pending.removed:
+            shown.pop("sort_title", None)
+        return shown
 
     def fill(self) -> None:
         """The list from the loaded catalog and the card's own rows, folders
@@ -1744,10 +1779,11 @@ class GamesTab:
             self.shown.set("")
             return
         records = shown_records(self.document, self.rows, self.pending, self.show.get())
+        records = [self.effective(record) for record in records]
         total = len(records)
         query = self.query.get().strip()
         if query:
-            records = [record for record in records if matches(self.effective(record), query)]
+            records = [record for record in records if matches(record, query)]
         self.shown.set(f"{len(records):,} of {total:,}" if query else "")
         self._add(card_catalog.tree(records), "")
         if keep is not None and self.tree.exists(keep):
@@ -1763,7 +1799,7 @@ class GamesTab:
         for record in node["games"]:
             state = str(record.get("state") or "")
             pending = self.pending.get(str(record.get("path", "")))
-            game = self.effective(record)
+            game = record
             status = status_of(record, pending)
             tag = state or (STATE_PENDING if pending is not None else "look" if status.startswith("No ") else "")
             self.tree.insert(parent, "end", iid=str(game["path"]), text=str(game.get("title", "")),
@@ -1795,7 +1831,16 @@ class GamesTab:
 
     def _set_fields(self, game: dict | None) -> None:
         shown = self.effective(game) if game is not None else {}
-        self.title.set(str(shown.get("title", "") or ""))
+        self._sort_title_edited = False
+        self._setting_fields = True
+        try:
+            title = str(shown.get("title", "") or "")
+            sort_title = str(shown.get("sort_title", "") or "")
+            self._sort_title_default = not sort_title.strip()
+            self.title.set(title)
+            self.sort_title.set(title if self._sort_title_default else sort_title)
+        finally:
+            self._setting_fields = False
         self.genre.set(str(shown.get("genre", "") or ""))
         self.publisher.set(str(shown.get("publisher", "") or ""))
         self.year.set(str(shown.get("year") or ""))
@@ -1810,6 +1855,27 @@ class GamesTab:
         self.text.delete("1.0", "end")
         self.text.insert("1.0", str(shown.get("description") or ""))
         self.text.edit_reset()
+
+    def _title_changed(self, *_args) -> None:
+        """An inherited Sort Title follows the Title while it is edited."""
+        if self._setting_fields or not self._sort_title_default:
+            return
+        self._setting_fields = True
+        try:
+            self.sort_title.set(self.title.get())
+        finally:
+            self._setting_fields = False
+
+    def _sort_title_changed(self, *_args) -> None:
+        if not self._setting_fields:
+            self._sort_title_default = False
+            self._sort_title_edited = True
+
+    def _finish_sort_title_edit(self, _event=None) -> None:
+        """Matching Title restores following only after a Sort Title edit."""
+        if self._sort_title_edited:
+            self._sort_title_edited = False
+            self._sort_title_default = self.sort_title.get() == self.title.get()
 
     def show_game(self, game: dict | None) -> None:
         """The panel for a game: every field as the console will show it,
@@ -1828,15 +1894,9 @@ class GamesTab:
         if self.note_for is not None and game is not None and self.note_for[0] != path:
             self.note_for = None
         self.edit_note.set(self.note_for[1] if self.note_for is not None and game is not None else "")
-        self._set_fields(game if catalogued else None)
-        if not catalogued and game is not None:
+        self._set_fields(game if editable else None)
+        if not editable and game is not None:
             self.title.set(str(game.get("title", "")))
-        if state == STATE_WAITING:
-            # Saved before and not on the card yet: the form shows the file.
-            own = self.own_text(game)
-            if own is not None:
-                self._set_fields(dict(game, **own.facts, title=own.title or str(game.get("title", "")),
-                                      description=own.description))
         self.file_name.set(PurePosixPath(path).name if game is not None else "")
         for widget in self.inputs:
             widget.configure(state="normal" if editable else "disabled")
@@ -1940,7 +2000,8 @@ class GamesTab:
         if year and not (year.isdigit() and 1970 <= int(year) <= 2100):
             problems.append("The year must be between 1970 and 2100.")
         players = self.players.get().strip()
-        return ({"title": self.title.get(), "genre": self.genre.get(), "publisher": self.publisher.get(),
+        return ({"title": self.title.get(), "sort_title": self.sort_title.get(),
+                 "genre": self.genre.get(), "publisher": self.publisher.get(),
                  "year": int(year) if year.isdigit() else 0,
                  "players": int(players) if players.isdigit() else 0,
                  "regions": [name for name in REGION_ORDER if self.regions[name].get()],
@@ -2001,12 +2062,14 @@ class GamesTab:
         game, card = self.selected(), self.card_of()
         if game is None or card is None or game.get("state") not in (None, "", STATE_WAITING):
             return
+        self._finish_sort_title_edit()
         values, problems = self.form()
         if problems:
             self.edit_note.set("Couldn't save. " + " ".join(problems))
             return
         picture = Path(self.picture.get().strip()) if self.picture.get().strip() else None
-        title, description, facts = edit_values(game, self.own_text(game), values)
+        title, description, facts = edit_values(game, self.own_text(game), values,
+                                               sort_title_default=self._sort_title_default)
         scope = custom_art.SCOPE_CODE if self.others.get() else custom_art.SCOPE_ROM
         try:
             touched = custom_art.save(card, game, picture, title, description, scope, facts)

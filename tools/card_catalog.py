@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 from tools import card_layout, cover_pack, make_sprite
+from tools.build_catalog import game_order_key
 
 SCHEMA_VERSION = 1
 
@@ -89,7 +90,7 @@ def why_missing(card: Path) -> str:
 
 def tree(games: list[dict]) -> dict:
     """The games as the browser shows them: folders nested from the card
-    root, each holding its own games in title order. A folder is a dict
+    root, each holding its own games in sort-title order. A folder is a dict
     with `folders` (name -> folder) and `games` (records)."""
     root = {"folders": {}, "games": []}
     for game in sorted(games, key=lambda g: (str(g.get("path", "")).casefold())):
@@ -99,7 +100,7 @@ def tree(games: list[dict]) -> dict:
             node = node["folders"].setdefault(name, {"folders": {}, "games": []})
         node["games"].append(game)
     for node in _walk(root):
-        node["games"].sort(key=lambda g: str(g.get("title", "")).casefold())
+        node["games"].sort(key=game_order_key)
     return root
 
 

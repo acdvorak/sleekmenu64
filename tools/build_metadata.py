@@ -45,7 +45,7 @@ from tools.metadata_repo import MetadataRepo, RepoError
 
 DEFAULT_COVERDB = Path(__file__).resolve().parent.parent / "data" / "coverdb.csv"
 DEFAULT_GENRES = genre_map.DEFAULT_PATH
-OVERRIDABLE = ("title", "genre", "publisher", "year", "players", "regions", "cover",
+OVERRIDABLE = ("title", "sort_title", "genre", "publisher", "year", "players", "regions", "cover",
                "favorite", "description")
 # Why a ROM-shaped file was set aside, as the window shows it.
 NOT_A_ROM = "not a ROM: no N64 header"
@@ -184,6 +184,11 @@ def build(roms: Path, sd_root: Path | None = None, coverdb_path: Path | None = D
             record["kind"] = kinds.classify(str(relative), "", disk=True)
             record["sources"] = _sources(origins, rom_path, relative, cover,
                                          title=provenance.TITLE_FILE_NAME, kind=provenance.DETECTED)
+            own = custom_art.find_text(art_index, roms, rom_path, art_folder)
+            if own is not None and "sort_title" in own.facts:
+                record["sort_title"] = own.facts["sort_title"]
+                record["sources"]["sort_title"] = provenance.YOURS
+                how["own text"] += 1
             records.append(record)
             continue
         header = read_header(path)
@@ -284,6 +289,9 @@ def build(roms: Path, sd_root: Path | None = None, coverdb_path: Path | None = D
         record["kind"] = kind
         record["sources"] = _sources(origins, rom_path, relative, cover, title=title_source,
                                      description=text_source, **facts)
+        if own is not None and "sort_title" in own.facts:
+            record["sort_title"] = own.facts["sort_title"]
+            record["sources"]["sort_title"] = provenance.YOURS
         records.append(record)
 
     # Consolidation happens last, so overrides are written in whichever

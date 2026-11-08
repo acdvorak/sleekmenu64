@@ -17,6 +17,7 @@ in `sleekmenu/art/`, or `<game code>.txt` there, is the description on the
 launch card, and header lines at the top of it set the facts:
 
     Title: Kaizo Race
+    Sort Title: Kaizo Race, The
     Genre: Racing
     Publisher: Nintendo
     Year: 1996
@@ -51,10 +52,10 @@ from tools import build_catalog, card_layout, kinds
 ART_SUFFIXES = (".png", ".jpg", ".jpeg")
 TEXT_SUFFIX = ".txt"
 # A header line: one of the facts, a colon, the value.
-HEADER_LINE = re.compile(r"^\s*(title|genre|publisher|year|players|regions?|kind)\s*:\s*(.*?)\s*$",
+HEADER_LINE = re.compile(r"^\s*(title|sort title|genre|publisher|year|players|regions?|kind)\s*:\s*(.*?)\s*$",
                          re.IGNORECASE)
 # The facts a header line can set, in the order the file writes them.
-FACTS = ("genre", "publisher", "year", "players", "regions", "kind")
+FACTS = ("sort_title", "genre", "publisher", "year", "players", "regions", "kind")
 REGION_NAMES = {"USA": "USA", "US": "USA", "NTSC-U": "USA",
                 "JAPAN": "JAPAN", "JPN": "JAPAN", "JP": "JAPAN", "NTSC-J": "JAPAN",
                 "EUROPE": "EUROPE", "EUR": "EUROPE", "EU": "EUROPE", "PAL": "EUROPE"}
@@ -133,7 +134,7 @@ def find_art(index: Index, roms_root: Path, rom_path: str, art_folder: Path | No
 class Text:
     title: str          # "" when the file sets none
     description: str    # whitespace collapsed, the way the collection's is
-    facts: dict         # genre, publisher (str), year, players (int), regions (list): only those set
+    facts: dict         # optional owner fields, only those set
     path: Path | None = None
 
 
@@ -141,8 +142,8 @@ def parse_facts(name: str, value: str) -> tuple[str, object] | None:
     """One header line's worth of fact, checked the way the catalog checks
     it: a year in 1970..2100, players 1..8, regions from the three the
     console knows. Anything else is left unset rather than guessed."""
-    name = name.casefold()
-    if name in ("genre", "publisher"):
+    name = name.casefold().replace(" ", "_")
+    if name in ("sort_title", "genre", "publisher"):
         return (name, " ".join(value.split())) if value.strip() else None
     if name == "year":
         return ("year", int(value)) if value.strip().isdigit() and 1970 <= int(value) <= 2100 else None
@@ -212,7 +213,8 @@ def format_text(title: str, description: str, facts: dict | None) -> str:
             value = ", ".join(str(region) for region in value)
         if name == "kind":
             value = kinds.NAMES.get(str(value), str(value))
-        lines.append(f"{name.capitalize()}: {value}")
+        label = "Sort Title" if name == "sort_title" else name.capitalize()
+        lines.append(f"{label}: {value}")
     if lines and description.strip():
         lines.append("")
     if description.strip():
@@ -469,13 +471,17 @@ def pending_edits(card: Path, roms_root: Path, document: dict,
             if genres and given.get("genre"):
                 given["genre"] = genre_map.apply(genres, given["genre"])
         for name, value in given.items():
-            blank = [] if name == "regions" else ("" if name in ("genre", "publisher", "title", "description", "kind")
+            # JSON corrections win over sidecars, so this owner value
+            # cannot change the next catalog's sort order.
+            if name == "sort_title" and sources.get(name) == provenance.OVERRIDE:
+                continue
+            blank = [] if name == "regions" else ("" if name in ("sort_title", "genre", "publisher", "title", "description", "kind")
                                                   else 0)
             if value != game.get(name, blank):
                 fields[name] = value
         # What the catalog has as the owner's that no file gives any more:
         # the next Prepare takes it back to the collection's or nothing.
-        for name in ("title", "description", "genre", "publisher", "year", "players", "regions", "kind"):
+        for name in ("title", "sort_title", "description", "genre", "publisher", "year", "players", "regions", "kind"):
             if sources.get(name) == provenance.YOURS and name not in given:
                 removed.append(name)
         picture = None

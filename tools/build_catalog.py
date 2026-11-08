@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Build a deterministic SleekMenu catalog using only Python's stdlib.
 
-Format 2 adds a description string to every record. Text that reaches the
+Format 3 adds an optional sort-title string to every record. Text that reaches the
 console is reduced to the 95 printable ASCII characters its font has: the
 descriptions come from box backs and carry curly quotes, dashes, trademark
 signs and the occasional accent, and the browser's 5x8 atlas has 128 glyphs.
@@ -19,6 +19,7 @@ import sys
 import unicodedata
 import zlib
 from pathlib import Path, PurePosixPath
+from typing import Mapping
 
 # Runnable as a script as well as importable -- see tools/__init__.py.
 if __package__ in (None, ""):
@@ -27,14 +28,13 @@ if __package__ in (None, ""):
 from tools import kinds
 
 MAGIC = b"EBC1"
-VERSION = 2
+VERSION = 3
 HEADER = struct.Struct("<4sHHIIIIII")
 # title, path, cover, publisher, genre, description offsets; year; players,
 # regions, flags; a reserved byte; the screenshot set (tools/shots.py, 0 for
-# none). src/catalog.c reads exactly this. The set number sits in what was
-# padding, so a browser from before screenshots reads the record as it
-# always did.
-RECORD = struct.Struct("<IIIIIIHBBBxH")
+# none); sort-title offset. src/catalog.c reads exactly this. The first 32
+# bytes retain format 2's layout, with the new offset appended at byte 32.
+RECORD = struct.Struct("<IIIIIIHBBBxHI")
 REGIONS = {"USA": 1, "JAPAN": 2, "EUROPE": 4}
 # Cartridge dumps and 64DD disk images; src/catalog.c lists the same set.
 ROM_SUFFIXES = {".z64", ".v64", ".n64", ".ndd"}
@@ -87,6 +87,18 @@ def console_text(value: str) -> str:
     text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if 32 <= ord(c) < 127)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def effective_sort_title(game: Mapping[str, object]) -> str:
+    """The console's ordering text, falling back to its displayed Title."""
+    title = console_text(str(game.get("title") or "")) or "?"
+    return console_text(str(game.get("sort_title") or "")) or title
+
+
+def game_order_key(game: Mapping[str, object]) -> tuple[str, str, bytes]:
+    """Shared game order; ASCII text keys and the exact UTF-8 ROM path."""
+    title = console_text(str(game.get("title") or "")) or "?"
+    return effective_sort_title(game).lower(), title.lower(), str(game["path"]).encode("utf-8")
 
 
 def fit_description(text: str) -> str:
@@ -193,6 +205,7 @@ def normalize(document: object) -> list[dict[str, object]]:
 
         result.append({
             "title": console_text(_text(raw.get("title"), f"{prefix}.title")) or "?",
+            "sort_title": console_text(_text(raw.get("sort_title"), f"{prefix}.sort_title", required=False)),
             "path": path,
             "cover": cover,
             # Genre and publisher come from a database that does not cover
@@ -221,6 +234,7 @@ def normalize(document: object) -> list[dict[str, object]]:
         seen.add(key)
         result.append({
             "title": console_text(PurePosixPath(path).stem) or "?",
+            "sort_title": "",
             "path": path,
             "cover": "",
             "publisher": "",
@@ -253,6 +267,7 @@ def encode(games: list[dict[str, object]]) -> bytes:
             intern(game["publisher"]), intern(game["genre"]), intern(game["description"]),
             int(game["year"]), int(game["players"]), int(game["region_mask"]),
             int(game["flags"]), int(game.get("shots", 0)),
+            intern(game.get("sort_title", "")),
         ))
     records_offset = HEADER.size
     strings_offset = records_offset + len(records)
