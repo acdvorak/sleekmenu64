@@ -121,7 +121,7 @@ the card again.
 ### Editing a game
 
 Select a game and the right side is that game as the console shows it: its
-box, drawn exactly as the console draws it, and its title, genre,
+box, drawn exactly as the console draws it, and its title, sort title, genre,
 publisher, year, players, kind, region and description, each in a field
 you can type in or pick from. A field marked "· yours" holds a value of
 your own.
@@ -130,6 +130,24 @@ Change what you like and press **Save**. Only what you changed is written:
 a field left as the card has it stays the database's or the collection's.
 Empty a field to get the original back. **Undo my changes** removes
 everything of yours for that game; the original was never touched.
+
+**Sort Title**, directly below Title, controls list order and defaults to
+the displayed Title. While it uses that default, changing Title updates it
+too. Enter a custom value to keep its order independent: Title **The Legend
+of Zelda**, Sort Title **Legend of Zelda, The** puts the game under L while
+still displaying **The Legend of Zelda**. Ordering is ordinary alphabetical
+comparison, with no automatic article removal or numeric sorting.
+
+Leaving the default alone creates no override when you save another field.
+To make Sort Title follow Title again, edit Sort Title to match Title
+exactly, then leave the field, press Enter or press **Save**. Changing Title
+to match an independent Sort Title, or reloading matching values, keeps
+Sort Title independent. You can also clear Sort Title and press **Save**
+to restore the default.
+**Undo my changes** removes it along with your other changes for that game.
+Save and Undo update the tree and request the usual card update, keeping
+the selected ROM as its row moves. Restart SleekMenu to see the new order
+on the console. History keeps its most-recently-played order.
 
 Every text box has **Cut**, **Copy**, **Paste** and **Select All** on a
 right-click (Control-click on a Mac, where they are in the Edit menu too),
@@ -390,6 +408,11 @@ number, and are meant to be used together: the catalog one writes is the
 catalog the other reads, and its format moves with the releases. So the
 SleekMenu a card gets is the one released with the Game Catalog Manager
 preparing it, never simply the newest.
+
+Sort Title uses packed catalog format 3. Older format 2 catalogs need
+**Update card** with this Manager. Install its matching ROM too: if you use
+**Keep SleekMenu** or a custom/local ROM, replace or rebuild that ROM before
+using the new catalog. An older ROM cannot read format 3.
 
 - **Keep SleekMenu on the card up to date** (on unless you untick it;
   `--keep-browser` on the command line leaves the card's alone) makes

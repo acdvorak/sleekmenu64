@@ -45,6 +45,16 @@ computer it runs on, and does not replace itself, since a program that
 installs what it downloads is a worse thing to trust than its owner
 fetching it (`tools/releases.py`).
 
+Sort Title moves the packed catalog to format 3: a 32-byte header and
+36-byte records. The first six string offsets remain at bytes 0–23, year,
+players, regions and flags at 24–28, reserved zero at 29, screenshot set at
+30–31, and the new optional sort-title string offset at 32–35. Offset zero
+is the shared empty string. The string table, deduplication, CRC and
+path-sorted storage are unchanged. Older packed formats require a rebuild;
+JSON schema 1 catalogs without the field still rebuild normally. Owners
+keeping an older ROM or building locally must install the matching ROM
+when using this catalog.
+
 **No dependence on one collection.** `tests/test_portability.py` builds a
 card from a library in which not one game appears in the shipped database and
 checks the result still works, boxes included.
@@ -133,6 +143,16 @@ pending the other way. No record of "unsaved changes" exists apart from
 the files, so a file dropped into `sleekmenu/art/` by hand is shown the
 same way, and nothing goes stale.
 
+The optional Sort Title follows the displayed Title until customized;
+populating that default never creates an owner header. Finishing a Sort
+Title edit by leaving the field, pressing Enter or saving restores
+following when its text matches Title exactly. Loading an explicit value
+or editing Title to match it keeps that value independent; entering and
+leaving Sort Title without editing it does too. Before building the tree,
+pending fields are overlaid, removed sort titles cleared, and new games' sidecars
+read, so the displayed Title and ordering key describe the same edit.
+Save, Undo and reload retain selection by ROM path as rows move.
+
 **Save is applied, not only saved.** The console reads `catalog.ebc` and
 nothing else, so an owner's file that no run has read changes nothing
 there -- and a Save that stopped at the file would look done in the window
@@ -205,7 +225,7 @@ the same names and links as the boxes; the owner's own by the ROM's name,
 first. Only a game catalogued as retail gets fetched ones -- its kind as
 the catalog has it, the owner's correction included, since a hack's parent
 showed in play is another game. Games with the same pictures share a
-numbered set; the set number rides in the two bytes that close the catalog
+numbered set; the set number rides in bytes 30–31 of the catalog
 record, which were padding, so an older browser reads the record as it
 always did. Two packs carry the sets, as the covers' two do: 48×36 for the
 details screen, 224×168 for the box view.
@@ -310,8 +330,18 @@ file turns up. One that is empty, or holds only Controller Pak files, is
 left out -- the tool records folders by their games, so an empty one would
 be new on every visit, and running the tool would not change that. The
 look stops at the first game, and gives up (counting the folder in) after
-256 entries or more subfolders than its queue of eight holds. Each extra is moved to where its name sorts, since
-the catalog is in path order. Membership is one hash lookup per entry
+256 entries or more subfolders than its queue of eight holds. After membership
+is assembled, the browser heapsorts folder and game index ranges separately.
+Folders use their own names and paths. Games use console-text Sort Title
+(falling back to console-text Title or `?`), then displayed Title, ignoring
+ASCII case for both, then the exact UTF-8 ROM path. The Manager uses the
+same tuple. Extras join the complete game sort using their filename-derived
+Title; packed records and catalog indices remain in path order. The sort
+is bounded O(n log n), runs on rebuild rather than per frame, and preserves
+selection by item identity when scans publish entries. Favourites and
+genre/filter results use that order; history retains recency. Coverflow's
+letter strip and jumps use effective Sort Title while rendering uses Title.
+Membership is one hash lookup per entry
 against the catalog's names in that folder, built once per read, and it
 compares bytes: the catalog must spell a name exactly as the card stores
 it. That matters for an accented name, which a FAT or exFAT card stores

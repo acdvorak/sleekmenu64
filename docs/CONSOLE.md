@@ -30,6 +30,10 @@ C-up cycles the three views. The **list** is for a game you can name: the
 current folder on the left, the box and the facts of the highlighted game on
 the right, and the genre tabs across the top.
 
+Games follow their Sort Title, set in the Game Catalog Manager, or their
+Title when none is set. The visible name stays the Title; history keeps
+its most-recently-played order.
+
 The **grid** shows twelve covers at a time, for scanning a folder by eye.
 
 ![The grid view: twelve box covers, the selected one framed, its title in the bar below](screenshots/grid.png)
@@ -39,7 +43,8 @@ side, gliding as you move; hold a direction and the shelf keeps sliding.
 Under it are the title, the genre, year, publisher and players, the start
 of the description (the rest creeps into view if you stay on a game for
 five seconds), and a strip of initials showing where you are. L and R
-jump to the next letter of the alphabet instead of paging.
+jump to the next letter of the alphabet instead of paging. The initials
+and letter jumps use Sort Title too.
 
 ![Coverflow: the selected box face on with the shelf receding on both sides; under it the title, the facts, the start of the description and a strip of initials](screenshots/coverflow.png)
 

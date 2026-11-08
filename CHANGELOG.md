@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.3.0
+
+- **Sort Title.** Set a game's optional Sort Title in the Games tab to
+  choose where it appears without changing its visible Title or ROM name.
+  It defaults to Title; make Sort Title match Title and leave the field,
+  or clear it and Save, to restore that default. Normal browsing,
+  favourites and genre/filter lists use the same order in the
+  Manager and console; history stays in most-recently-played order.
+- The packed catalog is now format 3. Install this release's Manager and
+  ROM together and **Update card** to rebuild older catalogs. If you keep
+  an older ROM or build your own, install a matching ROM before using the
+  new catalog.
+
 ## 2.2.2
 
 **Upgrading from 2.2.1:** download the new Game Catalog Manager and press

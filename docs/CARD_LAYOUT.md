@@ -142,7 +142,7 @@ browser again when the one at the root has been replaced.
 beside the packed one: the same games and fields, a `roms` key naming the
 folder the games were taken from (empty for the whole card) so the next run
 scans the same one without being told, plus for each game a
-`sources` object naming, for the cover, the title, the description, the
+`sources` object naming, for the cover, the title, the sort title, the description, the
 genre, the publisher, the year and the players, which of the four sources
 answered — `collection`, `collection (another region's box)`,
 `collection (by game code)`, `libretro`, `libretro, modified`, `database`,
@@ -152,7 +152,7 @@ database knew the dump (`crc`, `serial`, `serial without region`, or
 nothing), and `kind`: `retail`, `hack`, `translation` or `homebrew`
 (`tools/kinds.py`), packed into bits 2 to 4 of the record's flags in
 `catalog.ebc`. A game with screenshots has `shots`, its set number, which
-`catalog.ebc` carries in the last two bytes of the record (byte 29 is
+`catalog.ebc` carries in bytes 30–31 of the record (byte 29 is
 reserved and zero), and `shot_sources`, where each of its two pictures
 came from, in the cover's words; `shot_sprites` names what each picture in
 the two packs was made from, as `sprites` does for covers. Each game also carries `file` -- the ROM's size, its modification
@@ -282,13 +282,31 @@ different games share a code, neither is used. The collection's
 
 Your own text wins over both: `<ROM name>.txt` beside the ROM or in
 `sleekmenu/art/`, or `<CODE>.txt` there. Header lines at the top --
-`Title:`, `Genre:`, `Publisher:`, `Year:`, `Players:`, `Regions:`, `Kind:` --
+`Title:`, `Sort Title:`, `Genre:`, `Publisher:`, `Year:`, `Players:`, `Regions:`, `Kind:` --
 each set that one field, checked the way the catalog checks it (a year in
 1970..2100, players 1..8, regions from USA, Japan and Europe under the
 usual spellings, a kind from Retail, Hack, Translation and Homebrew), and
 the first line that is not a header starts the description. The window's Games tab writes this same file
 (`tools/custom_art.py`), and reads it back to show the edit as the next
 update will catalog it.
+
+The optional JSON field `sort_title` and owner header `Sort Title:` choose
+list order while `title` remains the visible name. For example:
+
+```text
+Title: The Legend of Zelda
+Sort Title: Legend of Zelda, The
+```
+
+Missing, null, empty or whitespace-only sort titles use Title; clearing the
+field in the Manager and saving removes its owner header. Unicode stays in
+the editable metadata; ordering uses the console's ASCII spelling, ignoring
+ASCII case, then displayed Title and the exact UTF-8 ROM path to break ties.
+Folders sort first by their own names; history stays in recency order.
+The JSON schema remains version 1. The packed catalog is format 3 with
+36-byte records, and needs the matching ROM and Manager. Sort Title changes
+neither filenames nor launch, save, artwork, screenshot, cheat, favourite
+or history identities, all of which still use the ROM path.
 
 ## How a game finds its cheats
 
