@@ -16,7 +16,7 @@ int main(int argc, char **argv) {
     sm_game_t game;
     char error[96];
 
-    assert(argc > 2);
+    assert(argc > 3);
 
     /* The good one loads, and every field lands where the builder put it. */
     assert(catalog_load(&catalog, argv[1], error, sizeof(error)));
@@ -24,6 +24,8 @@ int main(int argc, char **argv) {
     assert(catalog_get(&catalog, 0, &game));
     assert(!strcmp(game.path, "ROMS/GoldenEye 007 (USA).z64"));
     assert(!strcmp(game.title, "GoldenEye 007 (USA)"));
+    assert(!strcmp(game.sort_title, "Bond, James"));
+    assert(!strcmp(sm_game_sort_title(&game), "Bond, James"));
     assert(!strcmp(game.cover, "NGEE.sprite"));
     assert(!strcmp(game.publisher, "Nintendo"));
     assert(!strcmp(game.genre, "Shooters"));
@@ -32,7 +34,7 @@ int main(int argc, char **argv) {
     assert(game.players == 4);
     assert(game.regions == SM_REGION_USA);
     assert(game.flags == SM_FLAG_FAVORITE);
-    /* The screenshot set, in the two bytes that close the record: 513 is
+    /* The screenshot set stays at bytes 30 and 31: 513 is
        two bytes that are not the same, so an order swapped on either side
        reads as 258. */
     assert(game.shots == 513u);
@@ -45,22 +47,33 @@ int main(int argc, char **argv) {
     assert(game.cover[0] == '\0');
     assert(game.year == 0 && game.regions == 0);
     assert(game.shots == 0u);
+    assert(game.sort_title != NULL && !game.sort_title[0]);
+    assert(!strcmp(sm_game_sort_title(&game), "Homebrew"));
     /* What the tool set aside travels as a record the browser knows and
        never lists: its name, its path, and the flag that says so. */
     assert(catalog_get(&catalog, 2, &game));
     assert(!strcmp(game.path, "ROMS/Tools/IPL.z64"));
     assert(!strcmp(game.title, "IPL"));
     assert(game.flags == SM_FLAG_SET_ASIDE);
+    assert(game.sort_title != NULL && !game.sort_title[0]);
     assert(!catalog_get(&catalog, 3, &game));
     catalog_close(&catalog);
 
-    /* A format-1 catalog -- from a tool older than descriptions -- is
+    /* A format-2 catalog -- from a tool older than sort titles -- is
        refused with a message that says what to do, not misread as garbage. */
     assert(!catalog_load(&catalog, argv[2], error, sizeof(error)));
     assert(strstr(error, "older") != NULL);
 
     /* And a file that is not a catalog at all. */
     assert(!catalog_load(&catalog, argv[3], error, sizeof(error)));
+
+    /* The header and checksum may be valid while a new string reference is
+       invalid or lacks its terminator. Neither record may be returned. */
+    for (int i = 4; i < argc; i++) {
+        assert(catalog_load(&catalog, argv[i], error, sizeof(error)));
+        assert(!catalog_get(&catalog, 0, &game));
+        catalog_close(&catalog);
+    }
 
     printf("catalog checks passed\n");
     return 0;

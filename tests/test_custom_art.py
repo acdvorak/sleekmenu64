@@ -112,6 +112,31 @@ class LookupTests(unittest.TestCase):
                          "Title: T\nYear: 1999\nRegions: USA\n\nD\n")
         self.assertEqual(custom_art.format_text("", "", {"genre": "Racing"}), "Genre: Racing\n")
 
+    def test_sort_title_only_and_header_round_trip_keep_unicode(self):
+        raw = "sOrT tItLe: École, The\n"
+        title, description, facts = custom_art.parse_text(raw)
+        self.assertEqual((title, description, facts), ("", "", {"sort_title": "École, The"}))
+        self.assertEqual(custom_art.format_text(title, description, facts),
+                         "Sort Title: École, The\n")
+        self.assertEqual(custom_art.parse_text("Sort Title: \n\nSort Title: description text"),
+                         ("", "Sort Title: description text", {}),
+                         "the first non-header line still starts the description")
+
+    def test_sort_title_uses_existing_per_rom_and_shared_code_lookup_precedence(self):
+        self.art.mkdir(parents=True)
+        (self.art / "NSME.txt").write_text("Sort Title: Shared\n", encoding="utf-8")
+        (self.art / "SM64 Star Road.txt").write_text("Sort Title: Per ROM\n", encoding="utf-8")
+        beside = self.roms / "Hacks" / "SM64 Star Road.txt"
+        beside.write_text("Sort Title: Beside\n", encoding="utf-8")
+        def found():
+            return custom_art.find_text(custom_art.Index(), self.roms,
+                                        "Hacks/SM64 Star Road.z64", self.art, "NSME")
+        self.assertEqual(found().facts["sort_title"], "Beside")
+        beside.unlink()
+        self.assertEqual(found().facts["sort_title"], "Per ROM")
+        (self.art / "SM64 Star Road.txt").unlink()
+        self.assertEqual(found().facts["sort_title"], "Shared")
+
 
 class PlanTests(unittest.TestCase):
     def setUp(self):
@@ -258,6 +283,40 @@ class EditTests(unittest.TestCase):
             self.assertEqual(text.description, "The one everyone has.")
         with self.assertRaises(custom_art.EditError):
             custom_art.save(self.card, {"path": "ROMS/x.z64", "code": ""}, None, "t", "", scope=custom_art.SCOPE_CODE)
+
+    def test_sort_only_save_shared_scope_and_header_removal_are_pending_changes(self):
+        document = {"games": [dict(self.hack, sources={}), dict(self.mario, sources={})]}
+        custom_art.save(self.card, self.hack, None, "", "", scope=custom_art.SCOPE_CODE,
+                        facts={"sort_title": "A Mario"})
+        self.assertEqual((self.art / "NSME.txt").read_text(), "Sort Title: A Mario\n")
+        pending = custom_art.pending_edits(self.card, self.card, document)
+        self.assertEqual({path: edit.fields for path, edit in pending.items()},
+                         {self.hack["path"]: {"sort_title": "A Mario"},
+                          self.mario["path"]: {"sort_title": "A Mario"}})
+        for game in document["games"]:
+            game.update(sort_title="A Mario", genre="Racing",
+                        sources={"sort_title": provenance.YOURS, "genre": provenance.YOURS})
+        custom_art.save(self.card, self.hack, None, "", "", scope=custom_art.SCOPE_CODE,
+                        facts={"genre": "Racing"})
+        self.assertEqual((self.art / "NSME.txt").read_text(), "Genre: Racing\n")
+        pending = custom_art.pending_edits(self.card, self.card, document)
+        self.assertEqual({path: edit.removed for path, edit in pending.items()},
+                         {self.hack["path"]: ("sort_title",), self.mario["path"]: ("sort_title",)})
+        self.assertTrue(all(not edit.fields for edit in pending.values()))
+        custom_art.remove(self.card, self.card, self.hack)
+        self.assertFalse((self.art / "NSME.txt").exists(), "Undo removes the shared owner sidecar")
+
+    def test_json_sort_title_override_does_not_become_an_owner_pending_change(self):
+        game = dict(self.hack, sort_title="JSON order", genre="Racing",
+                    sources={"sort_title": provenance.OVERRIDE})
+        document = {"games": [game]}
+        custom_art.save(self.card, game, None, "", "",
+                        facts={"sort_title": "Owner order", "genre": "Puzzle"})
+        pending = custom_art.pending_edits(self.card, self.card, document)
+        self.assertEqual(pending[game["path"]].fields, {"genre": "Puzzle"},
+                         "the higher-priority JSON sort title will still win after preparation")
+        game["genre"] = "Puzzle"
+        self.assertEqual(custom_art.pending_edits(self.card, self.card, document), {})
 
     def test_save_by_code_takes_this_roms_own_file_out_of_its_way(self):
         """A file under the ROM's name answers before the code's does: left

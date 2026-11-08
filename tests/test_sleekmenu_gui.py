@@ -24,7 +24,7 @@ from unittest import mock
 from tests.rom_fixtures import write_rom
 from tests.test_custom_art import picture
 from tests.test_sleekmenu_prep import stay_offline, write_collection
-from tools import card_layout, custom_art, fetch, hires, metadata_repo, releases, sleekmenu_gui, sleekmenu_prep, version
+from tools import card_catalog, card_layout, custom_art, fetch, hires, metadata_repo, releases, sleekmenu_gui, sleekmenu_prep, version
 
 
 class VolumeTests(unittest.TestCase):
@@ -529,6 +529,41 @@ class GamesLineTests(unittest.TestCase):
         self.assertIn("Your title was removed",
                       sleekmenu_gui.pending_line(custom_art.Pending({}, None, ("title",))))
 
+    def test_sort_title_defaults_stay_optional_and_explicit_values_stay_owned(self):
+        game = {"title": "The Legend of Zelda"}
+        values = sleekmenu_gui.edit_values
+        default = {"title": game["title"], "sort_title": game["title"], "genre": "Adventure"}
+        self.assertEqual(values(game, None, default), ("", "", {"genre": "Adventure"}))
+        renamed = dict(default, title="New Title", sort_title="New Title")
+        self.assertEqual(values(game, None, renamed, sort_title_default=True),
+                         ("New Title", "", {"genre": "Adventure"}))
+        custom = dict(default, sort_title="Legend of Zelda, The")
+        self.assertEqual(values(game, None, custom)[2]["sort_title"], "Legend of Zelda, The")
+        own = custom_art.Text("", "", {"sort_title": game["title"]})
+        explicit = dict(game, sort_title=game["title"])
+        self.assertEqual(values(explicit, own, default)[2]["sort_title"], game["title"])
+        self.assertNotIn("sort_title", values(explicit, own, dict(default, sort_title=""))[2])
+        self.assertEqual(values(game, None, default, sort_title_default=False)[2]["sort_title"], game["title"])
+        self.assertEqual(sleekmenu_gui.owned_fields({"sources": {"sort_title": "yours"}}, None), {"sort_title"})
+        self.assertIn("sort title", sleekmenu_gui.pending_line(custom_art.Pending({"sort_title": "A"}, None, ())))
+        self.assertIn("sort title was removed",
+                      sleekmenu_gui.pending_line(custom_art.Pending({}, None, ("sort_title",))))
+
+    def test_ordering_uses_pending_titles_removals_and_newcomer_sidecars(self):
+        tab = sleekmenu_gui.GamesTab.__new__(sleekmenu_gui.GamesTab)
+        tab.pending = {
+            "A.z64": custom_art.Pending({"title": "Zulu", "sort_title": "Beta"}, None, ()),
+            "B.z64": custom_art.Pending({"title": "Bravo"}, None, ("sort_title",)),
+        }
+        tab.own_text = lambda game: custom_art.Text("New Title", "", {"sort_title": "Alpha"})
+        records = [{"path": "A.z64", "title": "A"},
+                   {"path": "B.z64", "title": "The B", "sort_title": "ZZZ"},
+                   {"path": "C.z64", "title": "C", "state": sleekmenu_gui.STATE_WAITING}]
+        shown = card_catalog.tree([tab.effective(game) for game in records])["games"]
+        self.assertEqual([game["path"] for game in shown], ["C.z64", "A.z64", "B.z64"])
+        self.assertEqual(shown[0]["title"], "New Title")
+        self.assertNotIn("sort_title", shown[-1])
+
     def test_the_boxes_a_game_could_have_are_one_per_region_its_own_first(self):
         from tools import coverdb
         database = coverdb.load(Path(__file__).resolve().parent.parent / "data" / "coverdb.csv")
@@ -721,6 +756,198 @@ class WindowTests(unittest.TestCase):
         # thread, where Tk refuses them with "main thread is not in main
         # loop". Collect them here, on the thread that made them.
         gc.collect()
+
+    def test_sort_title_follows_title_until_customized_and_saves_without_redundant_defaults(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            card = Path(scratch) / "CARD"
+            zelda, mario = "ROMS/A.z64", "ROMS/Z.z64"
+            write_rom(card / zelda, 1, 2)
+            write_rom(card / mario, 3, 4)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(sleekmenu_prep.run(sleekmenu_prep.Options(card=card, no_download=True)), 0)
+            document = card_catalog.load(card)
+            for game in document["games"]:
+                game["title"] = "The Legend of Zelda" if game["path"] == zelda else "Super Mario 64"
+            card_catalog.write(card, document)
+            root = sleekmenu_gui.build(card=str(card))
+            root.update()
+            state, games = root.sleekmenu_state, root.sleekmenu_state["catalog"]
+            state["notebook"].select(state["pages"]["games"])
+            games.apply = lambda _path: "no apply"
+            games.tree.selection_set(zelda)
+            games.on_select()
+            self.assertEqual(games.sort_title.get(), "The Legend of Zelda")
+            self.assertEqual(str(games.sort_title_entry.cget("state")), "normal")
+            games.genre.set("Adventure")
+            games.save_edit()
+            source = card / "sleekmenu" / "art" / "A.txt"
+            self.assertNotIn("Sort Title:", source.read_text())
+            games.title.set("A New Title")
+            self.assertEqual(games.sort_title.get(), "A New Title")
+            games.sort_title.set("Legend of Zelda, The")
+            games.title.set("The Legend of Zelda")
+            self.assertEqual(games.sort_title.get(), "Legend of Zelda, The")
+            games.save_edit()
+            self.assertEqual(games.tree.get_children(games.tree.parent(zelda)), (zelda, mario))
+            self.assertEqual(games.tree.selection(), (zelda,))
+            self.assertEqual(games.tree.item(zelda, "text"), "The Legend of Zelda")
+            self.assertIn("Sort Title: Legend of Zelda, The", source.read_text())
+            games.reload()
+            self.assertEqual(games.sort_title.get(), "Legend of Zelda, The")
+            games.sort_title.set("")
+            games.save_edit()
+            self.assertEqual(games.sort_title.get(), "The Legend of Zelda")
+            self.assertEqual(games.tree.get_children(games.tree.parent(zelda)), (mario, zelda))
+            self.assertEqual(games.tree.selection(), (zelda,))
+            self.assertNotIn("Sort Title:", source.read_text())
+            # Saving a Sort Title edit that matches Title restores following.
+            games.sort_title.set("A custom order")
+            games.save_edit()
+            self.assertIn("Sort Title: A custom order", source.read_text())
+            games.sort_title.set(games.title.get())
+            games.save_edit()
+            self.assertNotIn("Sort Title:", source.read_text())
+            games.reload()
+            games.title.set("Another Title")
+            self.assertEqual(games.sort_title.get(), "Another Title")
+            games.remove_edit()
+            self.assertEqual(games.tree.get_children(games.tree.parent(zelda)), (mario, zelda))
+            self.assertEqual(games.sort_title.get(), "The Legend of Zelda")
+            self.assertEqual(games.tree.selection(), (zelda,))
+
+    def test_finishing_a_matching_sort_title_edit_restores_following(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            card = Path(scratch) / "CARD"
+            path = "ROMS/Original.z64"
+            write_rom(card / path, 1, 2)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(sleekmenu_prep.run(sleekmenu_prep.Options(card=card, no_download=True)), 0)
+            root = sleekmenu_gui.build(card=str(card))
+            root.update()
+            state, games = root.sleekmenu_state, root.sleekmenu_state["catalog"]
+            state["notebook"].select(state["pages"]["games"])
+            games.tree.selection_set(path)
+            games.on_select()
+
+            for finish in ("<FocusOut>", "<Return>"):
+                with self.subTest(finish=finish):
+                    games.sort_title_entry.focus_force()
+                    root.update()
+                    games.sort_title_entry.delete(0, "end")
+                    games.sort_title_entry.insert(0, games.title.get())
+                    # Matching while still typing must not restore following.
+                    games.title.set("A changed title")
+                    self.assertEqual(games.sort_title.get(), "Original")
+                    games.title.set("Original")
+                    games.sort_title_entry.event_generate(finish)
+                    root.update()
+                    games.title.set("Following again")
+                    self.assertEqual(games.sort_title.get(), "Following again")
+                    # Continuing with a different sort title unlinks again.
+                    games.sort_title_entry.delete(0, "end")
+                    games.sort_title_entry.insert(0, "Custom")
+                    games.sort_title_entry.event_generate(finish)
+                    root.update()
+                    games.title.set("Original")
+                    self.assertEqual(games.sort_title.get(), "Custom")
+
+    def test_title_edits_and_loaded_equal_overrides_do_not_restore_following(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            card = Path(scratch) / "CARD"
+            path = "ROMS/Original.z64"
+            write_rom(card / path, 1, 2)
+            custom_art.save(card, {"path": path}, None, "", "", facts={"sort_title": "Fixed"})
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(sleekmenu_prep.run(sleekmenu_prep.Options(card=card, no_download=True)), 0)
+            root = sleekmenu_gui.build(card=str(card))
+            root.update()
+            state, games = root.sleekmenu_state, root.sleekmenu_state["catalog"]
+            state["notebook"].select(state["pages"]["games"])
+            games.apply = lambda _path: "no apply"
+            games.tree.selection_set(path)
+            games.on_select()
+            games.title.set("Fixed")
+            # Visiting Sort Title without editing it does not change its mode.
+            games.sort_title_entry.event_generate("<FocusOut>")
+            root.update()
+            games.save_edit()
+            source = card / "sleekmenu" / "art" / "Original.txt"
+            self.assertIn("Sort Title: Fixed", source.read_text())
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(sleekmenu_prep.run(sleekmenu_prep.Options(card=card, no_download=True)), 0)
+            games.reload()
+            self.assertEqual(games.title.get(), games.sort_title.get())
+            games.sort_title_entry.event_generate("<FocusOut>")
+            root.update()
+            games.title.set("Later title")
+            self.assertEqual(games.sort_title.get(), "Fixed")
+            games.save_edit()
+            self.assertIn("Sort Title: Fixed", source.read_text())
+            self.assertEqual(games.tree.selection(), (path,))
+
+    def test_a_newcomers_sort_title_orders_its_preview_and_survives_update(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            card = Path(scratch) / "CARD"
+            old, new = "ROMS/Existing.z64", "ROMS/New.z64"
+            write_rom(card / old, 1, 2)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(sleekmenu_prep.run(sleekmenu_prep.Options(card=card, no_download=True)), 0)
+            write_rom(card / new, 3, 4)
+            root = sleekmenu_gui.build(card=str(card))
+            root.update()
+            games = root.sleekmenu_state["catalog"]
+            games.apply = lambda _path: "no apply"
+            games.tree.selection_set(new)
+            games.on_select()
+            self.assertEqual(games.sort_title.get(), "New")
+            games.title.set("The New Game")
+            games.sort_title.set("Alpha")
+            games.save_edit()
+            self.assertEqual(games.tree.get_children(games.tree.parent(new)), (new, old))
+            self.assertEqual(games.tree.item(new, "text"), "The New Game")
+            games.reload()
+            self.assertEqual(games.sort_title.get(), "Alpha")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(sleekmenu_prep.run(sleekmenu_prep.Options(card=card, no_download=True)), 0)
+            games.applied(new, 0)
+            self.assertEqual(games.tree.get_children(games.tree.parent(new)), (new, old))
+            self.assertEqual(games.sort_title.get(), "Alpha")
+            self.assertEqual(games.tree.selection(), (new,))
+            self.assertFalse(games.selected().get("state"))
+
+    def test_clearing_a_catalogued_sort_override_restores_order_before_and_after_update(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            card = Path(scratch) / "CARD"
+            zelda, mario = "ROMS/The Legend of Zelda.z64", "ROMS/Super Mario 64.z64"
+            write_rom(card / zelda, 1, 2)
+            write_rom(card / mario, 3, 4)
+            custom_art.save(card, {"path": zelda}, None, "", "", facts={"sort_title": "Legend of Zelda, The"})
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(sleekmenu_prep.run(sleekmenu_prep.Options(card=card, no_download=True)), 0)
+            root = sleekmenu_gui.build(card=str(card))
+            root.update()
+            games = root.sleekmenu_state["catalog"]
+            games.apply = lambda _path: "no apply"
+            games.tree.selection_set(zelda)
+            games.on_select()
+            self.assertEqual(games.tree.get_children(games.tree.parent(zelda)), (zelda, mario))
+            games.sort_title.set("")
+            games.save_edit()
+            self.assertIn("sort_title", games.pending[zelda].removed)
+            self.assertEqual(games.sort_title.get(), "The Legend of Zelda")
+            self.assertEqual(games.tree.get_children(games.tree.parent(zelda)), (mario, zelda))
+            self.assertEqual(games.tree.selection(), (zelda,))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(sleekmenu_prep.run(sleekmenu_prep.Options(card=card, no_download=True)), 0)
+            games.applied(zelda, 0)
+            self.assertEqual(games.tree.get_children(games.tree.parent(zelda)), (mario, zelda))
+            self.assertEqual(games.sort_title.get(), "The Legend of Zelda")
+            games.sort_title.set("Legend of Zelda, The")
+            games.save_edit()
+            self.assertEqual(games.tree.get_children(games.tree.parent(zelda)), (zelda, mario))
+            games.remove_edit()
+            self.assertEqual(games.tree.get_children(games.tree.parent(zelda)), (mario, zelda))
+            self.assertEqual(games.tree.selection(), (zelda,))
 
     def wait_for(self, root, condition):
         deadline = time.monotonic() + 3
@@ -1268,6 +1495,10 @@ class WindowTests(unittest.TestCase):
                 # nothing of the panel is pushed out of the window by it
                 self.assertLessEqual(games.save_button.winfo_rooty() + games.save_button.winfo_height(),
                                      root.winfo_rooty() + root.winfo_height(), (width, height))
+                self.assertEqual(str(games.sort_title_entry.cget("state")), "normal")
+                self.assertGreater(games.sort_title_entry.winfo_rooty(), games.title_entry.winfo_rooty())
+                self.assertLessEqual(games.sort_title_entry.winfo_rootx() + games.sort_title_entry.winfo_width(),
+                                     root.winfo_rootx() + root.winfo_width(), (width, height))
                 return root.winfo_height(), games.text.winfo_height()
 
             # What is asked of every desktop: five lines in the smallest
@@ -2246,6 +2477,9 @@ class WindowTests(unittest.TestCase):
             self.assertTrue((card / "sleekmenu" / "art" / "Kaizo.png").is_file())
             self.assertFalse(games.dropped([]))
             games.reload()
+            self.assertEqual(games.tree.selection(), ("ROMS/Hacks/Kaizo.z64",))
+            games.tree.selection_remove(*games.tree.selection())
+            games.on_select()
             self.assertFalse(games.dropped([str(card / "box.png")]), "no game selected to give it to")
             self.assertIn("Select a game", games.edit_note.get())
             root.destroy()

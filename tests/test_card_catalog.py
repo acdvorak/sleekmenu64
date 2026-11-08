@@ -16,6 +16,28 @@ from tests.test_sleekmenu_prep import write_collection
 from tools import card_catalog, make_sprite, provenance, sleekmenu_prep
 
 
+class TreeOrderTests(unittest.TestCase):
+    def test_games_follow_console_sort_text_then_title_then_exact_path(self):
+        games = [
+            {"path": "ROMS/A.z64", "title": "The Legend of Zelda", "sort_title": "Legend of Zelda, The"},
+            {"path": "ROMS/Z.z64", "title": "Super Mario 64"},
+            {"path": "ROMS/tie-b.z64", "title": "beta", "sort_title": "same"},
+            {"path": "ROMS/tie-a.z64", "title": "Alpha", "sort_title": "Same"},
+            {"path": "ROMS/tie-A.z64", "title": "alpha", "sort_title": "same"},
+            {"path": "ROMS/accent.z64", "title": "Éclair", "sort_title": "éCLAIR"},
+            {"path": "ROMS/unsupported.z64", "title": "Ångström", "sort_title": "日本語"},
+            {"path": "ROMS/placeholder.z64", "title": "日本語", "sort_title": "日本語"},
+            {"path": "ROMS/Folder/1.z64", "title": "Last", "sort_title": "ZZZ"},
+            {"path": "ROMS/Another/2.z64", "title": "First", "sort_title": "AAA"},
+        ]
+        roms = card_catalog.tree(list(reversed(games)))["folders"]["ROMS"]
+        self.assertEqual(list(roms["folders"]), ["Another", "Folder"])
+        self.assertEqual([game["path"] for game in roms["games"]],
+                         ["ROMS/placeholder.z64", "ROMS/unsupported.z64", "ROMS/accent.z64", "ROMS/A.z64",
+                          "ROMS/tie-A.z64", "ROMS/tie-a.z64", "ROMS/tie-b.z64", "ROMS/Z.z64"])
+        self.assertEqual(roms["games"][3]["title"], "The Legend of Zelda")
+
+
 class CardTests(unittest.TestCase):
     """One card, prepared once for the class: a retail game the collection
     knows, a hack of it with the owner's own picture and text, a homebrew

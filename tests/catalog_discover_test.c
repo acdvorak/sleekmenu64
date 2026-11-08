@@ -79,7 +79,11 @@ static void make_file(const char *relative) {
 static bool listed(const sm_catalog_t *catalog, const char *path) {
     for (uint32_t i = 0; i < catalog->count; i++) {
         sm_game_t game;
-        if (catalog_get(catalog, i, &game) && !strcmp(game.path, path)) return true;
+        if (catalog_get(catalog, i, &game)) {
+            assert(game.sort_title != NULL && !game.sort_title[0]);
+            assert(sm_game_sort_title(&game) == game.title);
+            if (!strcmp(game.path, path)) return true;
+        }
     }
     return false;
 }

@@ -17,6 +17,7 @@ bool catalog_get(const sm_catalog_t *catalog, uint32_t index, sm_game_t *game) {
     if (index >= FIXTURE_COUNT) return false;
     memset(game, 0, sizeof(*game));
     game->title = "t";
+    game->sort_title = "";
     game->path = "p";
     game->cover = "";
     game->publisher = "";

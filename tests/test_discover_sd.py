@@ -51,6 +51,20 @@ class DiscoverSdTests(unittest.TestCase):
             discover_sd.discover_and_build(root, None, generated, catalog, manifest)
             self.assertEqual(catalog.read_bytes(), first)
 
+    def test_sort_title_reaches_both_discovery_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Zelda.z64").write_bytes(b"")
+            metadata = root / "meta.json"
+            metadata.write_text(json.dumps({"games": [{"path": "Zelda.z64",
+                "title": "The Legend of Zelda", "sort_title": "Légend of Zelda, The"}]}),
+                encoding="utf-8")
+            generated, packed, manifest = (root / "input.json", root / "catalog.ebc", root / "manifest.json")
+            discover_sd.discover_and_build(root, metadata, generated, packed, manifest)
+            game = json.loads(generated.read_text())["games"][0]
+            self.assertEqual(game["sort_title"], "Légend of Zelda, The")
+            self.assertIn(b"Legend of Zelda, The\0", packed.read_bytes())
+
     def test_optional_cover_map_adds_normalized_sprite_reference(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

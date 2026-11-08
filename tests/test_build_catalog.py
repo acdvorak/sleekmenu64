@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 import json
+import hashlib
 import struct
 import subprocess
-import struct
 import tempfile
 import unittest
 import zlib
@@ -28,20 +28,19 @@ class CatalogBuilderTests(unittest.TestCase):
         header = build_catalog.HEADER.unpack_from(data)
         magic, version, header_size, count, records_at, strings_at, strings_size, crc, flags = header
         self.assertEqual((magic, version, header_size, count, records_at, flags),
-                         (b"EBC1", 2, 32, 1, 32, 0))
+                         (b"EBC1", 3, 32, 1, 32, 0))
         self.assertEqual(strings_at, 32 + build_catalog.RECORD.size)
         self.assertEqual(strings_at + strings_size, len(data))
         self.assertEqual(crc, zlib.crc32(data[header_size:]))
         record = build_catalog.RECORD.unpack_from(data, records_at)
-        self.assertEqual(record[6:], (2026, 1, 1, 1, 0))
+        self.assertEqual(record[6:], (2026, 1, 1, 1, 0, 0))
 
     def test_the_screenshot_set_closes_the_record_where_padding_was(self):
-        """Bytes 29 to 31 were padding, which a browser from before
-        screenshots skips: byte 29 stays zero, the set is the last two."""
+        """The new offset leaves screenshot and reserved bytes in place."""
         games = build_catalog.normalize({"schema_version": 1, "games": [game(shots=0x0102)]})
         data = build_catalog.encode(games)
         record = data[32:32 + build_catalog.RECORD.size]
-        self.assertEqual(len(record), 32)
+        self.assertEqual(len(record), 36)
         self.assertEqual(record[29], 0)
         self.assertEqual(struct.unpack_from("<H", record, 30)[0], 0x0102)
         self.assertEqual(build_catalog.normalize({"schema_version": 1, "games": [game()]})[0]["shots"], 0)
@@ -68,7 +67,50 @@ class CatalogBuilderTests(unittest.TestCase):
             details = json.loads(manifest.read_text(encoding="utf-8"))
             self.assertEqual(details["game_count"], 1)
             self.assertEqual(details["size_bytes"], output.stat().st_size)
-            self.assertEqual(details["record_size"], 32)
+            self.assertEqual(details["record_size"], 36)
+            self.assertEqual(details["catalog_format"], 3)
+            self.assertEqual(details["catalog_sha256"], hashlib.sha256(output.read_bytes()).hexdigest())
+
+    def test_sort_title_is_optional_validated_and_interned_after_existing_fields(self):
+        for value in (None, "", " \t\n"):
+            with self.subTest(value=value):
+                games = build_catalog.normalize({"schema_version": 1, "games": [game(sort_title=value)]})
+                self.assertEqual(games[0]["sort_title"], "")
+                self.assertEqual(build_catalog.RECORD.unpack_from(build_catalog.encode(games), 32)[11], 0)
+        for value in (12, False, [], {}, "a\x00b"):
+            with self.subTest(value=value), self.assertRaises(build_catalog.CatalogError):
+                build_catalog.normalize({"schema_version": 1, "games": [game(sort_title=value)]})
+        games = build_catalog.normalize({"schema_version": 1, "games": [
+            game(title="Pokémon", sort_title=" Pokémon ", shots=513)]})
+        data = build_catalog.encode(games)
+        record = build_catalog.RECORD.unpack_from(data, 32)
+        self.assertEqual(games[0]["sort_title"], "Pokemon")
+        self.assertEqual(record[0], record[11])
+        self.assertEqual(struct.unpack_from("<I", data, 64)[0], record[11])
+        self.assertEqual(struct.unpack_from("<H", data, 62)[0], 513)
+        aside = build_catalog.normalize({"schema_version": 1, "games": [],
+                                         "set_aside": [{"path": "IPL.z64"}]})
+        self.assertEqual(aside[0]["sort_title"], "")
+
+    def test_game_order_uses_console_sort_title_display_title_and_exact_path(self):
+        # Keep these literal cases in agreement with ui_host_test.c.
+        games = [
+            game("ROMS/A.z64", title="The Legend of Zelda", sort_title="Legend of Zelda, The"),
+            game("ROMS/Z.z64", title="Super Mario 64"),
+            game("ROMS/tie-b.z64", title="beta", sort_title="same"),
+            game("ROMS/tie-a.z64", title="Alpha", sort_title="Same"),
+            game("ROMS/tie-A.z64", title="alpha", sort_title="same"),
+            game("ROMS/accent.z64", title="Éclair", sort_title="éCLAIR"),
+            game("ROMS/unsupported.z64", title="Ångström", sort_title="日本語"),
+            game("ROMS/placeholder.z64", title="日本語", sort_title="日本語"),
+        ]
+        self.assertEqual([g["path"] for g in sorted(games, key=build_catalog.game_order_key)], [
+            "ROMS/placeholder.z64", "ROMS/unsupported.z64", "ROMS/accent.z64", "ROMS/A.z64",
+            "ROMS/tie-A.z64", "ROMS/tie-a.z64", "ROMS/tie-b.z64", "ROMS/Z.z64"])
+        zelda = games[0]
+        zelda["sort_title"] = ""
+        self.assertEqual(build_catalog.effective_sort_title(zelda), "The Legend of Zelda")
+        self.assertGreater(build_catalog.game_order_key(zelda), build_catalog.game_order_key(games[1]))
 
     def test_a_description_travels_in_the_string_table_as_console_text(self):
         games = build_catalog.normalize({"schema_version": 1, "games": [
@@ -161,25 +203,40 @@ class ConsoleReaderTests(unittest.TestCase):
                 {"title": "GoldenEye 007 (USA)", "path": "ROMS/GoldenEye 007 (USA).z64",
                  "cover": "NGEE.sprite", "publisher": "Nintendo\u2122", "genre": "Shooters",
                  "year": 1997, "players": 4, "regions": ["USA"], "favorite": True,
-                 "description": "You are Bond. James Bond.", "shots": 513},
+                 "description": "You are Bond. James Bond.", "shots": 513,
+                 "sort_title": "Bond, Jàmes"},
                 {"title": "Homebrew", "path": "ROMS/Homebrew.z64", "regions": []},
             ], "set_aside": [{"path": "ROMS/Tools/IPL.z64", "why": "not a ROM: no N64 header"}]}),
                 encoding="utf-8")
             good = root / "catalog.ebc"
             build_catalog.build(source, good, root / "manifest.json")
-            # The same bytes stamped as format 1: the reader must refuse them.
+            # Format 2 must be rebuilt rather than read with the wrong size.
             data = bytearray(good.read_bytes())
-            struct.pack_into("<H", data, 4, 1)
+            struct.pack_into("<H", data, 4, 2)
             older = root / "older.ebc"
             older.write_bytes(data)
             junk = root / "junk.ebc"
             junk.write_bytes(b"not a catalog" * 8)
+            invalid_offset = root / "invalid-offset.ebc"
+            data = bytearray(good.read_bytes())
+            strings_size = struct.unpack_from("<I", data, 20)[0]
+            struct.pack_into("<I", data, 32 + 32, strings_size)
+            struct.pack_into("<I", data, 24, zlib.crc32(data[32:]))
+            invalid_offset.write_bytes(data)
+            unterminated = root / "unterminated.ebc"
+            data = bytearray(good.read_bytes())
+            data.extend(b"bad")
+            struct.pack_into("<I", data, 20, strings_size + 3)
+            struct.pack_into("<I", data, 32 + 32, strings_size)
+            struct.pack_into("<I", data, 24, zlib.crc32(data[32:]))
+            unterminated.write_bytes(data)
             binary = root / "catalog-test"
             subprocess.run(self.HOST_CC + ["src/catalog.c", "src/folder_scan.c",
                                            "tests/stubs/libdragon_stub.c",
                                            "tests/catalog_test.c", "-o", str(binary)],
                            cwd=self.ROOT, check=True)
-            subprocess.run([str(binary), str(good), str(older), str(junk)], check=True)
+            subprocess.run([str(binary), str(good), str(older), str(junk),
+                            str(invalid_offset), str(unterminated)], check=True)
 
     def test_the_console_spells_a_name_as_the_builder_spells_a_title(self):
         """A title the catalog carries was spelled by console_text(); a name

@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image
 
 from tests.rom_fixtures import write_rom
-from tools import cover_pack, coverdb, prepare_card
+from tools import card_catalog, cover_pack, coverdb, prepare_card, provenance
 from tools.metadata_repo import MetadataRepo
 
 
@@ -76,6 +76,30 @@ class PrepareCardTests(unittest.TestCase):
         self.prepare(with_collection=False)
         catalog = (self.card / "sleekmenu" / "catalog.ebc").read_bytes()
         self.assertIn(b"ROMS/Racing/Game (USA).z64", catalog)
+
+    def test_sort_title_is_reread_during_normal_incremental_and_rebuild_preparation(self):
+        write_rom(self.roms / "Zelda.z64", 1, 2, game_code="GA")
+        self.add_box("N/G/A/E")
+        sidecar = self.roms / "Zelda.txt"
+        for sort_title, rebuild in [("Légend of Zelda, The", False),
+                                    ("A Zelda", False), ("Z Zelda", True)]:
+            with self.subTest(sort_title=sort_title, rebuild=rebuild):
+                sidecar.write_text(f"Sort Title: {sort_title}\n", encoding="utf-8")
+                summary = self.prepare(rebuild=rebuild)
+                game = card_catalog.load(self.card)["games"][0]
+                self.assertEqual(game["sort_title"], sort_title, "editable JSON retains Unicode")
+                self.assertEqual(game["sources"]["sort_title"], provenance.YOURS)
+                packed = (self.card / "sleekmenu" / "catalog.ebc").read_bytes()
+                self.assertIn(sort_title.replace("é", "e").encode() + b"\0", packed)
+                if sort_title == "A Zelda":
+                    self.assertEqual(summary["remembered_headers"], 1)
+                    self.assertEqual(summary["sprites_converted"], 0)
+        sidecar.unlink()
+        self.prepare()
+        game = card_catalog.load(self.card)["games"][0]
+        self.assertFalse(game.get("sort_title"))
+        self.assertEqual(game["sources"]["sort_title"], provenance.NONE)
+        self.assertNotIn(b"Z Zelda\0", (self.card / "sleekmenu" / "catalog.ebc").read_bytes())
 
     def test_roms_outside_the_card_are_refused_with_a_reason(self):
         outside = self.root / "elsewhere"

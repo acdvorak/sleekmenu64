@@ -20,7 +20,7 @@ from tests.rom_fixtures import write_rom
 from tests.test_custom_art import picture
 from tests.test_fetch import Log, Server
 from tests.test_sleekmenu_prep import stay_offline, write_collection
-from tools import (card_catalog, card_layout, cover_pack, coverdb, custom_art, hires, make_sprite,
+from tools import (build_catalog, card_catalog, card_layout, cover_pack, coverdb, custom_art, hires, make_sprite,
                    provenance, shots, sleekmenu_prep)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -47,7 +47,8 @@ def records(card: Path) -> dict[str, int]:
     count, records_at, strings_at = struct.unpack_from("<III", data, 8)
     out = {}
     for number in range(count):
-        record = data[records_at + 32 * number:records_at + 32 * (number + 1)]
+        record = data[records_at + build_catalog.RECORD.size * number:
+                      records_at + build_catalog.RECORD.size * (number + 1)]
         start = strings_at + struct.unpack_from("<I", record, 4)[0]
         path = data[start:data.index(b"\0", start)].decode("utf-8")
         out[path] = struct.unpack_from("<H", record, 30)[0]

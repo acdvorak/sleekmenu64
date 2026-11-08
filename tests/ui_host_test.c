@@ -34,6 +34,7 @@ static const row_t *ROWS;
 static uint32_t ROW_COUNT;
 /* Each row's screenshot set, when a test gives them; none otherwise. */
 static const uint16_t *ROW_SHOTS;
+static const char *const *ROW_SORT_TITLES;
 static sm_catalog_t CATALOG;
 
 bool catalog_get(const sm_catalog_t *catalog, uint32_t index, sm_game_t *game) {
@@ -42,6 +43,7 @@ bool catalog_get(const sm_catalog_t *catalog, uint32_t index, sm_game_t *game) {
     if (index >= ROW_COUNT) return sm_extras_get(&catalog->extras, index - ROW_COUNT, game);
     memset(game, 0, sizeof(*game));
     game->title = ROWS[index].title;
+    game->sort_title = ROW_SORT_TITLES && ROW_SORT_TITLES[index] ? ROW_SORT_TITLES[index] : "";
     game->path = ROWS[index].path;
     game->cover = "cover.sprite";
     game->publisher = ROWS[index].publisher ? ROWS[index].publisher : "";
@@ -246,16 +248,21 @@ static void make_cover(void) {
    test says it stands for the boot-time scan of a card without one. */
 static bool start_discovered;
 
-static void start(const row_t *rows, uint32_t count) {
+static void start_with_sort_titles(const row_t *rows, uint32_t count, const char *const *sort_titles) {
     remove(SM_FAVORITES_PATH);
     ui_close(&ui);
     memset(&ui, 0, sizeof(ui));
     ROWS = rows; ROW_COUNT = count;
+    ROW_SORT_TITLES = sort_titles;
     ROW_SHOTS = NULL;
     memset(&CATALOG, 0, sizeof(CATALOG));
     CATALOG.count = count;
     CATALOG.discovery_mode = start_discovered;
     frame(NONE);
+}
+
+static void start(const row_t *rows, uint32_t count) {
+    start_with_sort_titles(rows, count, NULL);
 }
 
 static sm_actions_t press_of(size_t offset) {
@@ -265,6 +272,105 @@ static sm_actions_t press_of(size_t offset) {
     return a;
 }
 #define PRESS(field) press_of(offsetof(sm_actions_t, field))
+
+static void choose_item(uint32_t item) {
+    for (unsigned i = 0; i < ui.item_count; i++) {
+        if (ui.items[i] != item) continue;
+        ui.selected = i;
+        return;
+    }
+    assert(!"item not present");
+}
+
+/* These are the same literal keys as test_build_catalog.py's Python
+   ordering scenarios, after console_text() has spelled their accents. */
+static void sort_title_tests(void) {
+    static const row_t rows[] = {
+        {"ROMS/A.z64", "The Legend of Zelda", "Racing", SM_FLAG_FAVORITE, "", 0, NULL},
+        {"ROMS/Z.z64", "Super Mario 64", "Racing", SM_FLAG_FAVORITE, "", 0, NULL},
+        {"ROMS/tie-b.z64", "beta", "Racing", SM_FLAG_FAVORITE, "", 0, NULL},
+        {"ROMS/tie-a.z64", "Alpha", "Racing", SM_FLAG_FAVORITE, "", 0, NULL},
+        {"ROMS/tie-A.z64", "alpha", "Racing", SM_FLAG_FAVORITE, "", 0, NULL},
+        {"ROMS/accent.z64", "Eclair", "Racing", SM_FLAG_FAVORITE, "", 0, NULL},
+        {"ROMS/unsupported.z64", "Angstrom", "Racing", SM_FLAG_FAVORITE, "", 0, NULL},
+        {"ROMS/placeholder.z64", "?", "Racing", SM_FLAG_FAVORITE, "", 0, NULL},
+    };
+    static const char *const sorts[] = {"Legend of Zelda, The", "", "same", "Same", "same", "eCLAIR", "", ""};
+    static const uint32_t expected[] = {7u, 6u, 5u, 0u, 4u, 3u, 2u, 1u};
+    sm_game_t game;
+    start_with_sort_titles(rows, 8u, sorts);
+    assert(ui.item_count == 8u && !CATALOG.extras.count);
+    for (unsigned i = 0; i < 8u; i++) assert(ui.items[i] == expected[i]);
+    assert(catalog_get(&CATALOG, ui.items[3], &game) && !strcmp(game.title, "The Legend of Zelda"));
+    assert(!strcmp(sm_game_sort_title(&game), "Legend of Zelda, The"));
+    /* Grid and coverflow consume the same array; the letter key comes from
+       Legend rather than the unchanged visible title The Legend. */
+    frame(PRESS(toggle_view)); frame(PRESS(toggle_view));
+    assert(ui.view == SM_VIEW_COVERFLOW);
+    assert((ui.initials & (1u << 12)) && !(ui.initials & (1u << 20)));
+    choose_item(5u);                         /* Eclair */
+    frame(PRESS(page_down));
+    assert(ui.items[ui.selected] == 0u);      /* L */
+    frame(PRESS(page_down));
+    assert(ui.items[ui.selected] == 4u);      /* S, by title then exact path */
+    frame(PRESS(page_up));
+    assert(ui.items[ui.selected] == 0u);
+    settle(); draw();
+    assert(sm_test_drew("The Legend of Zelda"));
+    frame(PRESS(genre_next));                /* flat favourites */
+    assert(ui.flat && ui.item_count == 8u);
+    for (unsigned i = 0; i < 8u; i++) assert(ui.items[i] == expected[i]);
+    sm_history_record(&ui.history, rows[0].path);
+    sm_history_record(&ui.history, rows[1].path);
+    frame(PRESS(genre_next));                /* recency stays independent */
+    assert(ui.item_count == 2u && ui.items[0] == 1u && ui.items[1] == 0u);
+    frame(PRESS(genre_next));                /* genre subset */
+    assert(!ui.flat && ui.filter.genre && ui.item_count == 8u);
+    for (unsigned i = 0; i < 8u; i++) assert(ui.items[i] == expected[i]);
+    /* Removing the only nontrivial override restores the Title order on
+       the next catalog/rebuild, while the displayed title is unchanged. */
+    start(rows, 8u);
+    assert(ui.items[6] == 1u && ui.items[7] == 0u);
+
+    {
+        static const row_t folders[] = {
+            {"ROMS/Zebra/game.z64", "Alpha", "Racing", 0, "", 0, NULL},
+            {"ROMS/Apple/game.z64", "Zulu", "Racing", 0, "", 0, NULL},
+            {"ROMS/root.z64", "Root", "Racing", 0, "", 0, NULL},
+        };
+        static const char *const folder_sorts[] = {"A", "Z", "0"};
+        start_with_sort_titles(folders, 3u, folder_sorts);
+        assert(ui.item_count == 3u);
+        assert(ui.items[0] == (SM_UI_FOLDER_BIT | 1u));
+        assert(ui.items[1] == SM_UI_FOLDER_BIT && ui.items[2] == 2u);
+    }
+    {
+        static const row_t games[] = {
+            {"ROMS/A.z64", "The Legend of Zelda", "Racing", 0, "", 0, NULL},
+            {"ROMS/Z.z64", "Super Mario 64", "Racing", 0, "", 0, NULL},
+        };
+        static const char *const game_sorts[] = {"Legend of Zelda, The", ""};
+        static sm_test_dir_entry_t entries[101];
+        static char names[100][16];
+        unsigned frames = 0;
+        for (unsigned i = 0; i < 100u; i++) {
+            snprintf(names[i], sizeof(names[i]), "note%u.txt", i);
+            entries[i].name = names[i]; entries[i].folder = false;
+        }
+        entries[100].name = "Mario.z64"; entries[100].folder = false;
+        sm_test_dir_set("sd:/ROMS", entries, 101);
+        start_with_sort_titles(games, 2u, game_sorts);
+        assert(sm_folder_scan_busy(&ui.scan) && ui.item_count == 2u);
+        frame(PRESS(down));                  /* Super Mario, catalog index 1 */
+        assert(ui.items[ui.selected] == 1u);
+        while (sm_folder_scan_busy(&ui.scan) && frames++ < 20u) frame(NONE);
+        assert(frames < 20u && ui.item_count == 3u);
+        assert(ui.items[0] == 0u && ui.items[2] == 1u && ui.selected == 2u);
+        assert(catalog_get(&CATALOG, ui.items[1], &game));
+        assert(!strcmp(game.title, "Mario") && !game.sort_title[0]);
+        sm_test_dir_set(NULL, NULL, 0);
+    }
+}
 
 int main(void) {
     layout_ntsc();
@@ -602,6 +708,7 @@ int main(void) {
             {"JP/c.z64", "Gamma", "Sports", 0, "", 0, NULL},
         };
         start(rows, 3u);
+        choose_item(SM_UI_FOLDER_BIT);
         frame(PRESS(select));                 /* into US */
         frame(PRESS(favorite));               /* star Alpha */
 
@@ -887,6 +994,7 @@ int main(void) {
         assert(!strcmp(ui.folder, "ROMS"));
         assert(ui.item_count == 2u);
         /* Into US and back out lands on US, as before, without leaving. */
+        choose_item(SM_UI_FOLDER_BIT);
         frame(PRESS(select));
         assert(!strcmp(ui.folder, "ROMS/US"));
         assert(ui.item_count == 2u);
@@ -964,7 +1072,7 @@ int main(void) {
         frame(PRESS(back));
         assert(ui.screen == SM_SCREEN_LIBRARY && ui.item_count == 4u);
         /* the details say it in words */
-        ui.selected = 1u;
+        choose_item(1u);
         frame(NONE);
         frame(PRESS(select));
         assert(ui.screen == SM_SCREEN_LAUNCH_DETAILS);
@@ -2538,7 +2646,7 @@ int main(void) {
         frame(PRESS(back)); frame(PRESS(back));
 
         /* None: the card and the box view as they always were. */
-        frame(PRESS(down)); settle();
+        choose_item(2u); settle();
         frame(PRESS(select)); settle();
         assert(!ui.shot_thumbs[0] && !ui.shot_thumbs[1]);
         draw();
@@ -2552,7 +2660,7 @@ int main(void) {
 
         /* A picture of the wrong size is refused, and the page says so
            rather than drawing it. */
-        frame(PRESS(down)); settle();
+        choose_item(3u); settle();
         frame(PRESS(select)); settle();
         assert(ui.shot_thumbs[0] && !ui.shot_thumbs[1]);
         frame(PRESS(select));
@@ -2606,6 +2714,7 @@ int main(void) {
         }
     }
 
+    sort_title_tests();
     remove(SM_FAVORITES_PATH);
     printf("ui host checks passed\n");
     return 0;

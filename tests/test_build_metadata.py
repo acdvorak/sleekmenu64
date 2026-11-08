@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from tests.rom_fixtures import write_rom
 from tests.test_metadata_repo import collection
-from tools import build_metadata, coverdb, kinds
+from tools import build_metadata, coverdb, kinds, provenance
 from tools.metadata_repo import MetadataRepo
 
 
@@ -89,6 +90,34 @@ class BuildMetadataTests(unittest.TestCase):
         self.assertEqual(game["description"], "")
         # The header still speaks for itself.
         self.assertEqual(game["regions"], ["USA"])
+        self.assertFalse(game.get("sort_title"))
+        self.assertEqual(game["sources"]["sort_title"], provenance.NONE)
+
+    def test_owner_sort_title_and_json_override_keep_their_precedence_and_sources(self):
+        write_rom(self.roms / "Zelda.z64", 1, 2)
+        (self.roms / "Zelda.txt").write_text(
+            "Title: The Legend of Zelda\nSort Title: Legend of Zelda, The\nPublisher: Owner\n",
+            encoding="utf-8")
+        document, _ = self.build(sd_root=self.card)
+        game = document["games"][0]
+        self.assertEqual((game["title"], game["sort_title"], game["publisher"]),
+                         ("The Legend of Zelda", "Legend of Zelda, The", "Owner"))
+        self.assertEqual(game["sources"]["sort_title"], provenance.YOURS)
+        overrides = self.card / "overrides.json"
+        overrides.write_text(json.dumps({"schema_version": 1, "games": {
+            "N64/Zelda.z64": {"sort_title": "A Zelda"}}}), encoding="utf-8")
+        document, _ = self.build(sd_root=self.card, overrides=overrides)
+        game = document["games"][0]
+        self.assertEqual(game["sort_title"], "A Zelda")
+        self.assertEqual(game["sources"]["sort_title"], provenance.OVERRIDE)
+
+    def test_disk_image_accepts_owner_sort_title(self):
+        (self.roms / "The Disk.ndd").write_bytes(b"\xe8\x48\xd3\x16" + bytes(60))
+        (self.roms / "The Disk.txt").write_text("Sort Title: Disk, The\n", encoding="utf-8")
+        document, _ = self.build(sd_root=self.card)
+        game = document["games"][0]
+        self.assertEqual(game["sort_title"], "Disk, The")
+        self.assertEqual(game["sources"]["sort_title"], provenance.YOURS)
 
     def test_the_record_keeps_the_keys_a_refresh_needs(self):
         crc = write_rom(self.roms / "Game (USA).z64", 1, 2, game_code="GE")

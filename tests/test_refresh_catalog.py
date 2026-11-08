@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from tools import cover_pack, coverdb, refresh_catalog
+from tools import cover_pack, coverdb, provenance, refresh_catalog
 from tools.metadata_repo import MetadataRepo
 
 
@@ -64,6 +64,19 @@ class Fixture(unittest.TestCase):
 
 
 class RefreshCoversTests(Fixture):
+    def test_sort_title_and_its_source_survive_metadata_refresh_and_catalog_rebuild(self):
+        self.add_box("N/W/R/E", description="Refreshed description.")
+        meta = self.metadata([self.game("ROMS/Zelda.z64", code="NWRE", sort_title="Légend, The",
+                                        sources={"sort_title": provenance.YOURS})])
+        catalog = self.root / "catalog.ebc"
+        refresh_catalog.refresh(meta, self.database, self.root / "out.json",
+                                self.open_collection(), catalog=catalog, log=quiet)
+        game = self.games_out()["ROMS/Zelda.z64"]
+        self.assertEqual(game["description"], "Refreshed description.")
+        self.assertEqual(game["sort_title"], "Légend, The")
+        self.assertEqual(game["sources"]["sort_title"], provenance.YOURS)
+        self.assertIn(b"Legend, The\0", catalog.read_bytes())
+
     def test_a_newer_collection_reaches_a_card_built_before_it(self):
         self.add_box("N/W/R/E")
         meta = self.metadata([self.game("ROMS/Wave Race 64 (USA).z64", code="NWRE")])
